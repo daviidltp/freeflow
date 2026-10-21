@@ -1113,7 +1113,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
             apiKey: resolvedTranscriptionAPIKey,
             baseURL: resolvedTranscriptionBaseURL,
             transcriptionModel: transcriptionModel,
-            language: resolvedTranscriptionLanguage
+            language: resolvedTranscriptionLanguage,
+            vocabularyPrompt: VocabularyReplacements.transcriptionPrompt(fromVocabulary: customVocabulary)
         )
     }
 
@@ -2639,7 +2640,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         if preserveExactWording {
             let targetLanguage = outputLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
             if targetLanguage.isEmpty {
-                return (trimmedRawTranscript, .preservedExactWording, "")
+                return (VocabularyReplacements.applyStored(trimmedRawTranscript), .preservedExactWording, "")
             }
             do {
                 let result = try await postProcessingService.translateVerbatim(
@@ -2664,10 +2665,10 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 outputLanguage: outputLanguage,
                 dictationLanguage: dictationLanguage
             )
-            return (result.transcript, .postProcessingSucceeded, result.prompt)
+            return (VocabularyReplacements.applyStored(result.transcript), .postProcessingSucceeded, result.prompt)
         } catch {
             os_log(.error, log: recordingLog, "Post-processing failed: %{public}@", error.localizedDescription)
-            return (trimmedRawTranscript, .postProcessingFailedFallback, "")
+            return (VocabularyReplacements.applyStored(trimmedRawTranscript), .postProcessingFailedFallback, "")
         }
     }
 

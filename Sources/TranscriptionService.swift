@@ -60,6 +60,7 @@ class TranscriptionService {
     private let baseURL: URL
     private let transcriptionModel: String
     private let language: String?
+    private let vocabularyPrompt: String?
     private var transcriptionResponseFormat: String {
         Self.responseFormat(forModel: transcriptionModel)
     }
@@ -72,7 +73,8 @@ class TranscriptionService {
         apiKey: String,
         baseURL: String = "https://api.groq.com/openai/v1",
         transcriptionModel: String = "whisper-large-v3",
-        language: String? = nil
+        language: String? = nil,
+        vocabularyPrompt: String? = nil
     ) throws {
         self.apiKey = apiKey
         self.baseURL = try Self.normalizedBaseURL(from: baseURL)
@@ -80,6 +82,7 @@ class TranscriptionService {
         self.transcriptionModel = trimmedModel.isEmpty ? "whisper-large-v3" : trimmedModel
         let trimmedLanguage = language?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.language = (trimmedLanguage?.isEmpty == false) ? trimmedLanguage : nil
+        self.vocabularyPrompt = vocabularyPrompt
     }
 
     static func responseFormat(forModel model: String) -> String {
@@ -180,6 +183,7 @@ class TranscriptionService {
             model: transcriptionModel,
             responseFormat: transcriptionResponseFormat,
             language: language,
+            vocabularyPrompt: vocabularyPrompt,
             boundary: boundary
         )
 
@@ -250,6 +254,7 @@ class TranscriptionService {
         model: String,
         responseFormat: String,
         language: String?,
+        vocabularyPrompt: String?,
         boundary: String
     ) -> Data {
         var body = Data()
@@ -270,6 +275,12 @@ class TranscriptionService {
             append("--\(boundary)\r\n")
             append("Content-Disposition: form-data; name=\"language\"\r\n\r\n")
             append("\(language)\r\n")
+        }
+
+        if let vocabularyPrompt, !vocabularyPrompt.isEmpty {
+            append("--\(boundary)\r\n")
+            append("Content-Disposition: form-data; name=\"prompt\"\r\n\r\n")
+            append("\(vocabularyPrompt)\r\n")
         }
 
         append("--\(boundary)\r\n")
