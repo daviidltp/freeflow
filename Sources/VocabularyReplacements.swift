@@ -26,7 +26,29 @@ enum VocabularyReplacements {
     }
 
     static func applyStored(_ text: String) -> String {
-        apply(text, rules: UserDefaults.standard.string(forKey: storageKey) ?? "")
+        let fixed = apply(text, rules: UserDefaults.standard.string(forKey: storageKey) ?? "")
+        return restoreCasing(fixed, vocabulary: UserDefaults.standard.string(forKey: "custom_vocabulary") ?? "")
+    }
+
+    /// Whisper sometimes shouts a glossary term ("CUTMAX"). Any vocabulary term
+    /// that shows up fully upper-cased is put back to the spelling in the
+    /// vocabulary. Terms that are themselves all caps (API) are left alone.
+    static func restoreCasing(_ text: String, vocabulary: String) -> String {
+        var result = text
+        let terms = vocabulary
+            .split(whereSeparator: { $0 == "\n" || $0 == "," || $0 == ";" })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        for term in terms where term.count > 1 && term != term.uppercased() {
+            let shouted = term.uppercased()
+            let pattern = "(?<![\\p{L}\\p{N}])" + NSRegularExpression.escapedPattern(for: shouted) + "(?![\\p{L}\\p{N}])"
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            result = regex.stringByReplacingMatches(
+                in: result,
+                range: NSRange(result.startIndex..., in: result),
+                withTemplate: NSRegularExpression.escapedTemplate(for: term)
+            )
+        }
+        return result
     }
 
     /// Short glossary sent to the transcription model as its `prompt`, so it
