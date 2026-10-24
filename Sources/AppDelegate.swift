@@ -6,6 +6,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // macOS cierra solo las apps sin ventanas abiertas (cierre automático). FreeFlow vive
+        // en la barra de menús, así que al cerrar Settings se quedaría sin ventanas y moriría.
+        ProcessInfo.processInfo.disableAutomaticTermination("FreeFlow vive en la barra de menús")
+        ProcessInfo.processInfo.disableSuddenTermination()
+
         NetworkMonitor.shared.start()
 
         NotificationCenter.default.addObserver(
