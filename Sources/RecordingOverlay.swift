@@ -70,8 +70,10 @@ final class RecordingOverlayManager {
     private var dropTargetsPanel: NSPanel?
     private var dropHighlight: IslandAnchor?
     private var screenObserver: NSObjectProtocol?
-    private var hoverTimer: Timer?
-    private var hoverExitTicks = 0
+    private var mouseMonitors: [Any] = []
+    private var hoverFallbackTimer: Timer?
+    private var lastLevelUpdate: ContinuousClock.Instant?
+    private var hoverExitWork: DispatchWorkItem?
 
     var onStopButtonPressed: (() -> Void)?
     var onCancelButtonPressed: (() -> Void)?
@@ -183,6 +185,10 @@ final class RecordingOverlayManager {
 
     func updateAudioLevel(_ level: Float) {
         DispatchQueue.main.async {
+            // La onda no necesita más de ~30 actualizaciones por segundo; así SwiftUI no redibuja de más.
+            let now = ContinuousClock.now
+            if let last = self.lastLevelUpdate, last.duration(to: now) < .milliseconds(33) { return }
+            self.lastLevelUpdate = now
             self.overlayState.audioLevel = level
             var history = self.overlayState.levelHistory
             history.append(level)
@@ -290,6 +296,7 @@ final class RecordingOverlayManager {
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
         panel.isMovable = false
+        panel.acceptsMouseMovedEvents = true
 
         overlayState.shortcutLabel = idleShortcutLabel()
         let root = WisprIslandView(
@@ -302,6 +309,9 @@ final class RecordingOverlayManager {
             onDragEnded: { [weak self] in self?.idleDragEnded() }
         )
         let hosting = NSHostingView(rootView: root)
+        // El panel tiene tamaño fijo: sin esto, SwiftUI recalcula el tamaño mínimo de la ventana
+        // en cada ciclo de dibujo.
+        hosting.sizingOptions = []
         hosting.autoresizingMask = [.width, .height]
         panel.contentView = hosting
 
@@ -450,12 +460,14 @@ final class RecordingOverlayManager {
     /// (con margen) y cuando hay algo que pulsar; en el resto deja pasar los clics.
     private func updateMouseGating() {
         guard let panel, let screen = targetScreen else { return }
-        guard panelAcceptsMouse else {
-            panel.ignoresMouseEvents = true
-            return
+        let ignores: Bool
+        if panelAcceptsMouse {
+            let rect = shapeScreenRect(stage: stageFrame(on: screen), shape: shapeSize()).insetBy(dx: -8, dy: -8)
+            ignores = !rect.contains(NSEvent.mouseLocation)
+        } else {
+            ignores = true
         }
-        let rect = shapeScreenRect(stage: stageFrame(on: screen), shape: shapeSize()).insetBy(dx: -8, dy: -8)
-        panel.ignoresMouseEvents = !rect.contains(NSEvent.mouseLocation)
+        if panel.ignoresMouseEvents != ignores { panel.ignoresMouseEvents = ignores }
     }
 
     private var overlayHeight: CGFloat {
@@ -490,48 +502,72 @@ final class RecordingOverlayManager {
 
     // MARK: Hover and drag (idle bar)
 
-    /// Detecta el ratón por su posición en pantalla, no con onHover de SwiftUI: al cambiar el
-    /// tamaño del panel, onHover se disparaba varias veces y la isla se abría y cerraba sola.
+    /// Detecta el ratón por su posición en pantalla, no con onHover de SwiftUI (que se disparaba
+    /// varias veces al cambiar el tamaño y abría y cerraba la isla). Se reacciona a los eventos de
+    /// movimiento del ratón, sin temporizador, para no gastar CPU cuando el ratón está quieto.
     private func startHoverTracking() {
-        hoverTimer?.invalidate()
-        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in self?.hoverTick() }
+        stopHoverTracking()
+        let handler: (NSEvent) -> Void = { [weak self] _ in self?.mouseMoved() }
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved], handler: handler) {
+            mouseMonitors.append(global)
+        }
+        if let local = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved], handler: { event in
+            handler(event)
+            return event
+        }) {
+            mouseMonitors.append(local)
+        }
+        // Red de seguridad por si macOS no entrega los eventos globales: 8 comprobaciones por segundo.
+        let timer = Timer(timeInterval: 0.125, repeats: true) { [weak self] _ in self?.mouseMoved() }
+        timer.tolerance = 0.05
         RunLoop.main.add(timer, forMode: .common)
-        hoverTimer = timer
+        hoverFallbackTimer = timer
     }
 
     private func stopHoverTracking() {
-        hoverTimer?.invalidate()
-        hoverTimer = nil
-        hoverExitTicks = 0
+        mouseMonitors.forEach { NSEvent.removeMonitor($0) }
+        mouseMonitors.removeAll()
+        hoverFallbackTimer?.invalidate()
+        hoverFallbackTimer = nil
+        hoverExitWork?.cancel()
+        hoverExitWork = nil
     }
 
-    private func hoverTick() {
+    /// Zona sensible: la barrita con margen; abierta, el chip y el texto "Dictate".
+    private func hotRect(on screen: NSScreen) -> NSRect {
+        let anchor = IslandAnchor.current
+        let barSize = anchor.isVertical ? CGSize(width: 20, height: 52) : CGSize(width: 52, height: 20)
+        let openSize = anchor.isVertical ? CGSize(width: 170, height: 64) : CGSize(width: 150, height: 90)
+        let open = overlayState.idleHover
+        return shapeScreenRect(stage: stageFrame(on: screen), shape: open ? openSize : barSize)
+            .insetBy(dx: open ? -6 : -2, dy: open ? -6 : -2)
+    }
+
+    private func mouseMoved() {
         guard panel != nil, let screen = targetScreen else { return }
         updateMouseGating()
         guard overlayState.phase == .idle, !overlayState.isDragging else { return }
-        let stage = stageFrame(on: screen)
-        let anchor = IslandAnchor.current
-        // Zona sensible: la barrita con margen; abierta, el chip y el texto "Dictate".
-        let barSize = anchor.isVertical ? CGSize(width: 20, height: 52) : CGSize(width: 52, height: 20)
-        let openSize = anchor.isVertical ? CGSize(width: 170, height: 64) : CGSize(width: 150, height: 90)
-        let hotSize = overlayState.idleHover ? openSize : barSize
-        let hot = shapeScreenRect(stage: stage, shape: hotSize).insetBy(dx: overlayState.idleHover ? -6 : -2, dy: overlayState.idleHover ? -6 : -2)
-        let mouse = NSEvent.mouseLocation
-        if overlayState.idleHover {
-            if hot.contains(mouse) {
-                hoverExitTicks = 0
-            } else {
-                hoverExitTicks += 1
-                if hoverExitTicks >= 4 { // ~130 ms fuera antes de cerrar
-                    hoverExitTicks = 0
-                    overlayState.idleHover = false
-                    applyLayout(animated: true)
-                }
+        let inside = hotRect(on: screen).contains(NSEvent.mouseLocation)
+        if inside {
+            hoverExitWork?.cancel()
+            hoverExitWork = nil
+            if !overlayState.idleHover {
+                overlayState.idleHover = true
+                applyLayout(animated: true)
             }
-        } else if hot.contains(mouse) {
-            hoverExitTicks = 0
-            overlayState.idleHover = true
-            applyLayout(animated: true)
+        } else if overlayState.idleHover, hoverExitWork == nil {
+            // ~130 ms fuera antes de cerrar, y se vuelve a comprobar por si el ratón regresó.
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.hoverExitWork = nil
+                guard self.overlayState.idleHover, self.overlayState.phase == .idle,
+                      let screen = self.targetScreen,
+                      !self.hotRect(on: screen).contains(NSEvent.mouseLocation) else { return }
+                self.overlayState.idleHover = false
+                self.applyLayout(animated: true)
+            }
+            hoverExitWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.13, execute: work)
         }
     }
 
@@ -597,6 +633,7 @@ final class RecordingOverlayManager {
         guard let dropTargetsPanel else { return }
         let view = IslandDropTargetsView(screenSize: screen.frame.size, highlighted: dropHighlight)
         let hosting = NSHostingView(rootView: view)
+        hosting.sizingOptions = []
         hosting.frame = NSRect(origin: .zero, size: screen.frame.size)
         dropTargetsPanel.contentView = hosting
     }
