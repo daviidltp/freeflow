@@ -4,7 +4,7 @@ import AppKit
 // MARK: - State
 
 final class RecordingOverlayState: ObservableObject {
-    @Published var phase: OverlayPhase = .recording
+    @Published var phase: OverlayPhase = .idle
     @Published var recordingStartedAt: ContinuousClock.Instant?
     @Published var showsRecordingTimer = RecordingTimerPreference.defaultEnabled
     @Published var audioLevel: Float = 0.0
@@ -15,9 +15,17 @@ final class RecordingOverlayState: ObservableObject {
     @Published var updateVersion: String = ""
     @Published var errorMessage: String?
     @Published var toastID: UUID?
+    @Published var idleHover = false
+    @Published var isDragging = false
+    @Published var anchor: IslandAnchor = .bottom
+    /// Tamaño de la forma negra/gris dentro del panel; el panel se anima hacia el mismo tamaño.
+    @Published var shapeSize = CGSize(width: 38, height: 6)
+    @Published var shortcutLabel = "fn"
 }
 
 enum OverlayPhase {
+    /// Barrita en reposo (sin dictado en curso).
+    case idle
     case initializing
     case recording
     case transcribing
@@ -51,43 +59,27 @@ enum WisprIsland {
     static let border = WisprPalette.vast900
 }
 
-// MARK: - Panel Helpers
-
-private func makeOverlayPanel(width: CGFloat, height: CGFloat) -> NSPanel {
-    let panel = NSPanel(
-        contentRect: NSRect(x: 0, y: 0, width: width, height: height),
-        styleMask: [.borderless, .nonactivatingPanel],
-        backing: .buffered,
-        defer: false
-    )
-    panel.backgroundColor = .clear
-    panel.isOpaque = false
-    panel.hasShadow = false
-    panel.level = .screenSaver
-    panel.ignoresMouseEvents = true
-    panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-    panel.isReleasedWhenClosed = false
-    panel.hidesOnDeactivate = false
-    return panel
-}
-
 // MARK: - Manager
 
+/// Un único panel persistente: la barrita en reposo es el mismo elemento que se expande
+/// a botón de dictado al pasar el ratón y a chip con la onda cuando hablas.
 final class RecordingOverlayManager {
-    private var overlayWindow: NSPanel?
+    private var panel: NSPanel?
     private let overlayState = RecordingOverlayState()
     private var lockedOverlayWidth: CGFloat?
+    private var dropTargetsPanel: NSPanel?
+    private var dropHighlight: IslandAnchor?
+    private var screenObserver: NSObjectProtocol?
 
     var onStopButtonPressed: (() -> Void)?
     var onCancelButtonPressed: (() -> Void)?
     var onUpdateOverlayPressed: (() -> Void)?
     var onIdleDictatePressed: (() -> Void)?
-    var idleShortcutLabel: () -> String = { "fn" }
+    var idleShortcutLabel: () -> String = { "fn" } {
+        didSet { overlayState.shortcutLabel = idleShortcutLabel() }
+    }
 
-    private var idlePanel: NSPanel?
-    private var idleHovering = false
-
-    /// The screen the overlay should appear on. The user picks one of
+    /// The screen the island should appear on. The user picks one of
     /// three modes in Settings, stored in UserDefaults under
     /// `overlay_display_id`:
     ///
@@ -111,10 +103,19 @@ final class RecordingOverlayManager {
         }
     }
 
-    private var overlayAcceptsMouseEvents: Bool {
-        (overlayState.phase == .recording && overlayState.recordingTriggerMode == .toggle)
-            || overlayState.phase == .updateAvailable
+    private var isActive: Bool { overlayState.phase != .idle }
+
+    /// El panel solo captura el ratón cuando hay algo que pulsar; mientras dictas en modo
+    /// "mantener" deja pasar los clics.
+    private var panelAcceptsMouse: Bool {
+        switch overlayState.phase {
+        case .idle, .updateAvailable: return true
+        case .recording: return overlayState.recordingTriggerMode == .toggle
+        default: return false
+        }
     }
+
+    // MARK: Public API
 
     func showInitializing(mode: RecordingTriggerMode = .hold, isCommandMode: Bool = false) {
         DispatchQueue.main.async {
@@ -124,7 +125,7 @@ final class RecordingOverlayManager {
             self.overlayState.recordingStartedAt = nil
             self.overlayState.phase = .initializing
             self.resetLevels()
-            self.showOverlayPanel(animatedResize: false)
+            self.showOverlayPanel(animated: true)
         }
     }
 
@@ -141,7 +142,7 @@ final class RecordingOverlayManager {
             self.beginRecordingTimer(startedAt: startedAt, showsRecordingTimer: showsRecordingTimer)
             self.overlayState.phase = .recording
             self.resetLevels()
-            self.showOverlayPanel(animatedResize: true)
+            self.showOverlayPanel(animated: true)
         }
     }
 
@@ -157,7 +158,7 @@ final class RecordingOverlayManager {
             self.overlayState.isCommandMode = isCommandMode
             self.beginRecordingTimer(startedAt: startedAt, showsRecordingTimer: showsRecordingTimer)
             self.overlayState.phase = .recording
-            self.updateOverlayLayout(animated: true)
+            self.applyLayout(animated: true)
         }
     }
 
@@ -174,7 +175,7 @@ final class RecordingOverlayManager {
     func setRecordingTriggerMode(_ mode: RecordingTriggerMode, animated: Bool) {
         DispatchQueue.main.async {
             self.overlayState.recordingTriggerMode = mode
-            self.updateOverlayLayout(animated: animated)
+            self.applyLayout(animated: animated)
         }
     }
 
@@ -192,9 +193,9 @@ final class RecordingOverlayManager {
 
     func showTranscribing() {
         DispatchQueue.main.async {
-            self.lockedOverlayWidth = self.overlayWindow?.frame.width ?? self.overlayWidth
+            self.lockedOverlayWidth = self.panel?.frame.width ?? self.overlayWidth
             self.overlayState.phase = .transcribing
-            self.showOverlayPanel(animatedResize: true)
+            self.showOverlayPanel(animated: true)
         }
     }
 
@@ -202,7 +203,7 @@ final class RecordingOverlayManager {
         DispatchQueue.main.async {
             self.lockedOverlayWidth = nil
             self.overlayState.phase = .feedback
-            self.showOverlayPanel(animatedResize: true)
+            self.showOverlayPanel(animated: true)
         }
     }
 
@@ -214,7 +215,7 @@ final class RecordingOverlayManager {
 
     /// Surface a transient error in the island. The pill resizes to
     /// fit the message (subject to the truncation cap), holds for a few
-    /// seconds, then dismisses.
+    /// seconds, then goes back to the idle bar.
     func showError(_ message: String) {
         let truncated: String = {
             if message.count <= Self.maxToastMessageLength { return message }
@@ -227,7 +228,7 @@ final class RecordingOverlayManager {
             self.overlayState.toastID = toastID
             self.lockedOverlayWidth = nil
             self.overlayState.phase = .feedback
-            self.showOverlayPanel(animatedResize: true)
+            self.showOverlayPanel(animated: true)
             DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) { [weak self] in
                 guard let self else { return }
                 guard self.overlayState.phase == .feedback,
@@ -248,7 +249,7 @@ final class RecordingOverlayManager {
             self.overlayState.isCommandMode = false
             self.overlayState.updateVersion = version
             self.overlayState.phase = .updateAvailable
-            self.showOverlayPanel(animatedResize: true)
+            self.showOverlayPanel(animated: true)
         }
     }
 
@@ -258,88 +259,187 @@ final class RecordingOverlayManager {
         }
     }
 
-    private func showOverlayPanel(animatedResize: Bool) {
-        hideIdleIsland()
-        let frame = overlayFrame
-
-        if let panel = overlayWindow {
-            panel.ignoresMouseEvents = !overlayAcceptsMouseEvents
-            panel.contentView = makeOverlayContent(frame: frame)
-            resize(panel: panel, to: frame, animated: animatedResize)
-            panel.alphaValue = 1
-            panel.orderFrontRegardless()
-            return
+    /// Muestra u oculta la barrita en reposo según el ajuste. No toca un dictado en curso.
+    func refreshIdleIsland() {
+        DispatchQueue.main.async {
+            guard !self.isActive else { return }
+            if IdleIslandPreference.isEnabled {
+                self.showOverlayPanel(animated: false)
+            } else {
+                self.closePanel(animated: false)
+            }
         }
-
-        let panel = makeOverlayPanel(width: frame.width, height: frame.height)
-        panel.ignoresMouseEvents = !overlayAcceptsMouseEvents
-        panel.contentView = makeOverlayContent(frame: frame)
-
-        // Aparece desde unos puntos más abajo, con fundido.
-        var startFrame = frame
-        startFrame.origin.y -= 8
-        panel.setFrame(startFrame, display: true)
-        panel.alphaValue = 0
-        panel.orderFrontRegardless()
-
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
-            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1.0, 0.36, 1.0)
-            panel.animator().setFrame(frame, display: true)
-            panel.animator().alphaValue = 1
-        }
-
-        overlayWindow = panel
     }
 
-    private func updateOverlayLayout(animated: Bool) {
-        guard let panel = overlayWindow else { return }
-        let frame = overlayFrame
-        panel.ignoresMouseEvents = !overlayAcceptsMouseEvents
-        panel.contentView = makeOverlayContent(frame: frame)
-        resize(panel: panel, to: frame, animated: animated)
-    }
+    // MARK: Panel
 
-    private func makeOverlayContent(frame: NSRect) -> NSView {
+    private func makePanel() -> NSPanel {
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 52, height: 20),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = false
+        panel.level = .screenSaver
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = false
+        panel.isMovable = false
+
+        overlayState.shortcutLabel = idleShortcutLabel()
         let root = WisprIslandView(
             state: overlayState,
             onStopButtonPressed: { [weak self] in self?.onStopButtonPressed?() },
             onCancelButtonPressed: { [weak self] in self?.onCancelButtonPressed?() },
-            onUpdateOverlayPressed: { [weak self] in self?.onUpdateOverlayPressed?() }
+            onUpdateOverlayPressed: { [weak self] in self?.onUpdateOverlayPressed?() },
+            onIdlePress: { [weak self] in self?.onIdleDictatePressed?() },
+            onHoverChange: { [weak self] hovering in self?.setIdleHover(hovering) },
+            onDragChanged: { [weak self] in self?.idleDragChanged() },
+            onDragEnded: { [weak self] in self?.idleDragEnded() }
         )
-        .frame(width: frame.width, height: frame.height)
-
         let hosting = NSHostingView(rootView: root)
-        hosting.frame = NSRect(x: 0, y: 0, width: frame.width, height: frame.height)
         hosting.autoresizingMask = [.width, .height]
-        return hosting
+        panel.contentView = hosting
+
+        if screenObserver == nil {
+            screenObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.didChangeScreenParametersNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in self?.applyLayout(animated: false) }
+        }
+        return panel
     }
 
-    private func resize(panel: NSPanel, to frame: NSRect, animated: Bool) {
-        guard animated else {
-            panel.setFrame(frame, display: true)
-            return
+    private func showOverlayPanel(animated: Bool) {
+        if panel == nil {
+            let created = makePanel()
+            panel = created
+            applyLayout(animated: false)
+            created.alphaValue = 0
+            created.orderFrontRegardless()
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.18
+                created.animator().alphaValue = 1
+            }
+        } else {
+            applyLayout(animated: animated)
+            panel?.alphaValue = 1
+            panel?.orderFrontRegardless()
+        }
+    }
+
+    private func closePanel(animated: Bool) {
+        hideDropTargets()
+        guard let closing = panel else { return }
+        panel = nil
+        overlayState.idleHover = false
+        overlayState.isDragging = false
+        let finish = {
+            // orderOut alone leaves the panel retained in NSApp.windows with its
+            // SwiftUI hierarchy mounted — repeatForever animations keep flushing
+            // Core Animation forever. Unmount and close so the panel deallocates.
+            closing.orderOut(nil)
+            closing.contentView = nil
+            closing.close()
+        }
+        guard animated else { finish(); return }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.14
+            closing.animator().alphaValue = 0
+        }, completionHandler: finish)
+    }
+
+    private func dismissAll() {
+        lockedOverlayWidth = nil
+        overlayState.recordingStartedAt = nil
+        overlayState.isCommandMode = false
+        overlayState.updateVersion = ""
+        overlayState.phase = .idle
+        overlayState.idleHover = false
+        if IdleIslandPreference.isEnabled {
+            applyLayout(animated: true)
+        } else {
+            closePanel(animated: true)
+        }
+    }
+
+    // MARK: Layout
+
+    private struct Layout {
+        let frame: NSRect
+        let shape: CGSize
+    }
+
+    private func layout(on screen: NSScreen) -> Layout {
+        let anchor = IslandAnchor.current
+        let visible = screen.visibleFrame
+        let size: CGSize
+        let shape: CGSize
+        var edgeInset: CGFloat = 3
+
+        switch overlayState.phase {
+        case .idle:
+            if overlayState.isDragging {
+                size = CGSize(width: 56, height: 40)
+                shape = CGSize(width: 44, height: 28)
+            } else if overlayState.idleHover {
+                size = CGSize(width: 150, height: 90)
+                shape = CGSize(width: 48, height: 28)
+            } else if anchor.isVertical {
+                size = CGSize(width: 20, height: 52)
+                shape = CGSize(width: 6, height: 38)
+            } else {
+                size = CGSize(width: 52, height: 20)
+                shape = CGSize(width: 38, height: 6)
+            }
+        default:
+            size = CGSize(width: overlayWidth, height: overlayHeight)
+            shape = size
+            edgeInset = WisprIsland.bottomMargin
         }
 
+        if overlayState.phase == .idle && overlayState.isDragging {
+            let mouse = NSEvent.mouseLocation
+            return Layout(frame: NSRect(x: mouse.x - size.width / 2, y: mouse.y - size.height / 2, width: size.width, height: size.height), shape: shape)
+        }
+
+        let origin: NSPoint
+        switch anchor {
+        case .bottom:
+            origin = NSPoint(x: screen.frame.midX - size.width / 2, y: visible.minY + edgeInset)
+        case .left:
+            origin = NSPoint(x: visible.minX + edgeInset, y: visible.midY - size.height / 2)
+        case .right:
+            origin = NSPoint(x: visible.maxX - size.width - edgeInset, y: visible.midY - size.height / 2)
+        }
+        return Layout(frame: NSRect(origin: origin, size: size), shape: shape)
+    }
+
+    private func applyLayout(animated: Bool) {
+        guard let panel, let screen = targetScreen else { return }
+        let target = layout(on: screen)
+        overlayState.anchor = IslandAnchor.current
+        overlayState.shapeSize = target.shape
+        panel.ignoresMouseEvents = !panelAcceptsMouse
+
+        guard animated, !overlayState.isDragging else {
+            panel.setFrame(target.frame, display: true)
+            return
+        }
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.22
+            context.duration = 0.26
             context.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1.0, 0.36, 1.0)
-            panel.animator().setFrame(frame, display: true)
+            panel.animator().setFrame(target.frame, display: true)
         }
     }
 
     private var overlayHeight: CGFloat {
         let showsButtons = overlayState.phase == .recording && overlayState.recordingTriggerMode == .toggle
         return showsButtons ? 40 : 34
-    }
-
-    private var overlayFrame: NSRect {
-        guard let screen = targetScreen else { return .zero }
-        let width = overlayWidth
-        let height = overlayHeight
-        let x = screen.frame.midX - width / 2
-        let y = screen.visibleFrame.minY + WisprIsland.bottomMargin
-        return NSRect(x: x, y: y, width: width, height: height)
     }
 
     private var overlayWidth: CGFloat {
@@ -354,7 +454,7 @@ final class RecordingOverlayManager {
             return min(460, max(180, CGFloat(msg.count) * 6.8 + 56))
         case .updateAvailable:
             return 168
-        case .initializing, .recording, .transcribing:
+        case .idle, .initializing, .recording, .transcribing:
             var width: CGFloat = 20 * 2 + CGFloat(WisprIsland.barCount) * (WisprIsland.barWidth + WisprIsland.barSpacing) - WisprIsland.barSpacing
             if overlayState.phase == .recording {
                 if overlayState.recordingTriggerMode == .toggle {
@@ -367,95 +467,87 @@ final class RecordingOverlayManager {
         }
     }
 
-    // MARK: Idle island
+    // MARK: Hover and drag (idle bar)
 
-    private var idleFrame: NSRect {
-        guard let screen = targetScreen else { return .zero }
-        let width: CGFloat = idleHovering ? 150 : 64
-        let height: CGFloat = idleHovering ? 90 : 20
-        return NSRect(
-            x: screen.frame.midX - width / 2,
-            y: screen.visibleFrame.minY + WisprIsland.bottomMargin - (idleHovering ? 4 : 7),
-            width: width,
-            height: height
-        )
+    private func setIdleHover(_ hovering: Bool) {
+        guard overlayState.phase == .idle, !overlayState.isDragging, overlayState.idleHover != hovering else { return }
+        overlayState.idleHover = hovering
+        applyLayout(animated: true)
     }
 
-    /// Muestra u oculta la mini-isla según el ajuste y si hay un dictado en curso.
-    func refreshIdleIsland() {
-        DispatchQueue.main.async {
-            guard IdleIslandPreference.isEnabled, self.overlayWindow == nil else {
-                self.hideIdleIsland()
-                return
-            }
-            self.showIdleIsland()
+    private func nearestAnchor(to point: NSPoint, on screen: NSScreen) -> IslandAnchor {
+        let visible = screen.visibleFrame
+        let targets: [(IslandAnchor, NSPoint)] = [
+            (.bottom, NSPoint(x: screen.frame.midX, y: visible.minY + 30)),
+            (.left, NSPoint(x: visible.minX + 30, y: visible.midY)),
+            (.right, NSPoint(x: visible.maxX - 30, y: visible.midY)),
+        ]
+        return targets.min { hypot($0.1.x - point.x, $0.1.y - point.y) < hypot($1.1.x - point.x, $1.1.y - point.y) }?.0 ?? .bottom
+    }
+
+    private func idleDragChanged() {
+        guard overlayState.phase == .idle, let screen = targetScreen else { return }
+        if !overlayState.isDragging {
+            overlayState.isDragging = true
+            overlayState.idleHover = false
+            showDropTargets(on: screen)
+        }
+        applyLayout(animated: false)
+        let highlight = nearestAnchor(to: NSEvent.mouseLocation, on: screen)
+        if highlight != dropHighlight {
+            dropHighlight = highlight
+            updateDropTargets(on: screen)
         }
     }
 
-    private func showIdleIsland() {
-        idleHovering = false
-        let frame = idleFrame
-        guard !frame.isEmpty else { return }
-        let panel = idlePanel ?? makeOverlayPanel(width: frame.width, height: frame.height)
-        panel.ignoresMouseEvents = false
-        panel.level = .statusBar
-        panel.contentView = makeIdleContent(frame: frame)
-        panel.setFrame(frame, display: true)
-        panel.alphaValue = 1
-        panel.orderFrontRegardless()
-        idlePanel = panel
+    private func idleDragEnded() {
+        guard overlayState.isDragging, let screen = targetScreen else { return }
+        IslandAnchor.current = nearestAnchor(to: NSEvent.mouseLocation, on: screen)
+        overlayState.isDragging = false
+        hideDropTargets()
+        applyLayout(animated: true)
     }
 
-    private func hideIdleIsland() {
-        guard let panel = idlePanel else { return }
-        idlePanel = nil
-        idleHovering = false
-        panel.orderOut(nil)
-        panel.contentView = nil
-        panel.close()
-    }
-
-    private func makeIdleContent(frame: NSRect) -> NSView {
-        let root = IdleIslandView(
-            shortcutLabel: idleShortcutLabel(),
-            isHovering: idleHovering,
-            onHoverChange: { [weak self] hovering in self?.setIdleHovering(hovering) },
-            onPress: { [weak self] in self?.onIdleDictatePressed?() }
+    private func showDropTargets(on screen: NSScreen) {
+        let created = dropTargetsPanel ?? NSPanel(
+            contentRect: screen.frame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
         )
-        .frame(width: frame.width, height: frame.height)
-        let hosting = NSHostingView(rootView: root)
-        hosting.frame = NSRect(x: 0, y: 0, width: frame.width, height: frame.height)
-        hosting.autoresizingMask = [.width, .height]
-        return hosting
+        created.backgroundColor = .clear
+        created.isOpaque = false
+        created.hasShadow = false
+        created.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue - 1)
+        created.ignoresMouseEvents = true
+        created.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        created.isReleasedWhenClosed = false
+        created.setFrame(screen.frame, display: true)
+        dropTargetsPanel = created
+        updateDropTargets(on: screen)
+        created.alphaValue = 0
+        created.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.15
+            created.animator().alphaValue = 1
+        }
     }
 
-    private func setIdleHovering(_ hovering: Bool) {
-        guard let panel = idlePanel, idleHovering != hovering else { return }
-        idleHovering = hovering
-        let frame = idleFrame
-        panel.contentView = makeIdleContent(frame: frame)
-        panel.setFrame(frame, display: true)
+    private func updateDropTargets(on screen: NSScreen) {
+        guard let dropTargetsPanel else { return }
+        let view = IslandDropTargetsView(screenSize: screen.frame.size, highlighted: dropHighlight)
+        let hosting = NSHostingView(rootView: view)
+        hosting.frame = NSRect(origin: .zero, size: screen.frame.size)
+        dropTargetsPanel.contentView = hosting
     }
 
-    private func dismissAll() {
-        lockedOverlayWidth = nil
-        overlayState.recordingStartedAt = nil
-        overlayState.isCommandMode = false
-        overlayState.updateVersion = ""
-        guard let panel = overlayWindow else { return }
-        overlayWindow = nil
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.14
-            panel.animator().alphaValue = 0
-        }, completionHandler: { [weak self] in
-            self?.refreshIdleIsland()
-            // orderOut alone leaves the panel retained in NSApp.windows with its
-            // SwiftUI hierarchy mounted — repeatForever animations keep flushing
-            // Core Animation forever. Unmount and close so the panel deallocates.
-            panel.orderOut(nil)
-            panel.contentView = nil
-            panel.close()
-        })
+    private func hideDropTargets() {
+        dropHighlight = nil
+        guard let closing = dropTargetsPanel else { return }
+        dropTargetsPanel = nil
+        closing.orderOut(nil)
+        closing.contentView = nil
+        closing.close()
     }
 }
 
@@ -466,28 +558,103 @@ struct WisprIslandView: View {
     let onStopButtonPressed: () -> Void
     let onCancelButtonPressed: () -> Void
     let onUpdateOverlayPressed: () -> Void
+    let onIdlePress: () -> Void
+    let onHoverChange: (Bool) -> Void
+    let onDragChanged: () -> Void
+    let onDragEnded: () -> Void
+
+    private let spring = Animation.spring(response: 0.3, dampingFraction: 0.82)
+
+    private var isIdle: Bool { state.phase == .idle }
 
     private var showsButtons: Bool {
         state.phase == .recording && state.recordingTriggerMode == .toggle
     }
 
+    /// Dónde se ancla la forma dentro del panel: pegada al borde en hover, centrada en el resto.
+    private var containerAlignment: Alignment {
+        guard isIdle, state.idleHover else { return .center }
+        switch state.anchor {
+        case .bottom: return .bottom
+        case .left: return .leading
+        case .right: return .trailing
+        }
+    }
+
+    private var isCollapsedBar: Bool { isIdle && !state.idleHover && !state.isDragging }
+
     var body: some View {
+        ZStack(alignment: containerAlignment) {
+            Color.clear
+            shape
+                .frame(width: state.shapeSize.width, height: state.shapeSize.height)
+                .overlay(alignment: .top) {
+                    if isIdle && state.idleHover && !state.isDragging {
+                        tooltip
+                            .offset(y: -38)
+                            .transition(.opacity)
+                    }
+                }
+        }
+        .contentShape(Rectangle())
+        .onHover { onHoverChange($0) }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 4, coordinateSpace: .global)
+                .onChanged { _ in if isIdle { onDragChanged() } }
+                .onEnded { _ in if isIdle { onDragEnded() } }
+        )
+        .animation(spring, value: state.shapeSize)
+        .animation(.easeInOut(duration: 0.2), value: state.phase)
+        .animation(.easeInOut(duration: 0.2), value: state.idleHover)
+    }
+
+    private var shape: some View {
         ZStack {
             Capsule(style: .continuous)
-                .fill(Color.black)
+                .fill(isCollapsedBar ? WisprPalette.vast910 : (isIdle && state.idleHover ? WisprPalette.vast925 : Color.black))
             Capsule(style: .continuous)
-                .strokeBorder(WisprIsland.border, lineWidth: 1)
-
+                .strokeBorder(isCollapsedBar || (isIdle && state.idleHover) ? WisprPalette.vast700.opacity(0.7) : WisprIsland.border, lineWidth: 1)
             content
-                .padding(.horizontal, showsButtons ? 5 : 20)
+                .padding(.horizontal, showsButtons ? 5 : (isIdle ? 0 : 20))
+                .transition(.opacity)
         }
-        .animation(.spring(response: 0.28, dampingFraction: 1.0), value: state.phase)
-        .animation(.spring(response: 0.28, dampingFraction: 1.0), value: state.recordingTriggerMode)
+    }
+
+    private var tooltip: some View {
+        HStack(spacing: 4) {
+            Text("Dictate")
+            Text(state.shortcutLabel).fontWeight(.bold)
+        }
+        .font(WisprFonts.figtree(13, weight: .medium))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .frame(height: 30)
+        .fixedSize()
+        .background(Capsule().fill(Color.black))
+        .overlay(Capsule().strokeBorder(WisprIsland.border, lineWidth: 1))
     }
 
     @ViewBuilder
     private var content: some View {
         switch state.phase {
+        case .idle:
+            if state.isDragging {
+                Image(systemName: "waveform")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white)
+            } else if state.idleHover {
+                Button(action: onIdlePress) {
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Start dictation")
+            } else {
+                Color.clear
+            }
         case .feedback:
             if let message = state.errorMessage {
                 IslandErrorView(message: message)

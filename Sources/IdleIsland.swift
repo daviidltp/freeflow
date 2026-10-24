@@ -1,8 +1,9 @@
 import SwiftUI
 import AppKit
 
-/// Mini-isla en reposo: una barrita abajo en el centro que, al pasar el ratón, se
-/// convierte en un botón de micrófono con la etiqueta "Dictate <atajo>".
+/// Mini-isla en reposo: una barrita en el borde de la pantalla que, al pasar el ratón, se
+/// convierte en un botón de micrófono con la etiqueta "Dictate <atajo>". Se puede arrastrar
+/// a uno de tres sitios: abajo en el centro, o a media altura en el borde izquierdo o derecho.
 enum IdleIslandPreference {
     static let storageKey = "show_idle_island"
 
@@ -11,46 +12,47 @@ enum IdleIslandPreference {
     }
 }
 
-struct IdleIslandView: View {
-    let shortcutLabel: String
-    let isHovering: Bool
-    let onHoverChange: (Bool) -> Void
-    let onPress: () -> Void
+enum IslandAnchor: String, CaseIterable {
+    case bottom
+    case left
+    case right
+
+    static let storageKey = "island_anchor"
+
+    static var current: IslandAnchor {
+        get { IslandAnchor(rawValue: UserDefaults.standard.string(forKey: storageKey) ?? "") ?? .bottom }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: storageKey) }
+    }
+
+    var isVertical: Bool { self != .bottom }
+}
+
+/// Capa que oscurece la pantalla mientras se arrastra la isla y marca los tres huecos donde encaja.
+struct IslandDropTargetsView: View {
+    let screenSize: CGSize
+    let highlighted: IslandAnchor?
 
     var body: some View {
-        VStack(spacing: 8) {
-            Spacer(minLength: 0)
-            if isHovering {
-                HStack(spacing: 4) {
-                    Text("Dictate")
-                    Text(shortcutLabel).fontWeight(.bold)
-                }
-                .font(WisprFonts.figtree(13, weight: .medium))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 14)
-                .frame(height: 30)
-                .background(Capsule().fill(Color.black))
-                .overlay(Capsule().strokeBorder(WisprIsland.border, lineWidth: 1))
-                .transition(.opacity)
-            }
-            Button(action: onPress) {
-                ZStack {
-                    Capsule().fill(isHovering ? WisprPalette.vast925 : WisprPalette.vast910)
-                    Capsule().strokeBorder(WisprPalette.vast700.opacity(0.7), lineWidth: 1)
-                    if isHovering {
-                        Image(systemName: "mic.fill")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.white)
-                    }
-                }
-                .frame(width: isHovering ? 48 : 38, height: isHovering ? 28 : 6)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Start dictation")
+        ZStack {
+            Color.black.opacity(0.35)
+            slot(.bottom)
+                .frame(width: 90, height: 62)
+                .position(x: screenSize.width / 2, y: screenSize.height - 40)
+            slot(.left)
+                .frame(width: 58, height: 84)
+                .position(x: 36, y: screenSize.height / 2)
+            slot(.right)
+                .frame(width: 58, height: 84)
+                .position(x: screenSize.width - 36, y: screenSize.height / 2)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .contentShape(Rectangle())
-        .onHover { onHoverChange($0) }
-        .animation(.spring(response: 0.25, dampingFraction: 0.85), value: isHovering)
+        .frame(width: screenSize.width, height: screenSize.height)
+        .ignoresSafeArea()
+        .animation(.easeOut(duration: 0.12), value: highlighted)
+    }
+
+    private func slot(_ anchor: IslandAnchor) -> some View {
+        Capsule(style: .continuous)
+            .fill(Color.white.opacity(highlighted == anchor ? 0.95 : 0.75))
+            .scaleEffect(highlighted == anchor ? 1.06 : 1)
     }
 }
