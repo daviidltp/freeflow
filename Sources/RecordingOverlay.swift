@@ -8,6 +8,8 @@ final class RecordingOverlayState: ObservableObject {
     @Published var recordingStartedAt: ContinuousClock.Instant?
     @Published var showsRecordingTimer = RecordingTimerPreference.defaultEnabled
     @Published var audioLevel: Float = 0.0
+    /// Últimos niveles de audio, para dibujar la onda desplazándose como en Wispr.
+    @Published var levelHistory: [Float] = Array(repeating: 0, count: WisprIsland.barCount)
     @Published var recordingTriggerMode: RecordingTriggerMode = .hold
     @Published var isCommandMode = false
     @Published var updateVersion: String = ""
@@ -35,6 +37,20 @@ extension NSScreen {
     }
 }
 
+// MARK: - Island metrics
+
+/// Medidas de la isla flotante: pill negro, borde fino gris oscuro, barras blancas de 2 pt.
+enum WisprIsland {
+    static let barCount = 22
+    static let barWidth: CGFloat = 2
+    static let barSpacing: CGFloat = 2
+    static let maxBarHeight: CGFloat = 20
+    static let minBarHeight: CGFloat = 2
+    static let bottomMargin: CGFloat = 10
+    static let buttonSize: CGFloat = 30
+    static let border = WisprPalette.vast900
+}
+
 // MARK: - Panel Helpers
 
 private func makeOverlayPanel(width: CGFloat, height: CGFloat) -> NSPanel {
@@ -46,30 +62,13 @@ private func makeOverlayPanel(width: CGFloat, height: CGFloat) -> NSPanel {
     )
     panel.backgroundColor = .clear
     panel.isOpaque = false
-    panel.hasShadow = true
+    panel.hasShadow = false
     panel.level = .screenSaver
     panel.ignoresMouseEvents = true
-    panel.collectionBehavior = [.canJoinAllSpaces]
+    panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     panel.isReleasedWhenClosed = false
     panel.hidesOnDeactivate = false
     return panel
-}
-
-private func makeNotchContent<V: View>(
-    width: CGFloat,
-    height: CGFloat,
-    cornerRadius: CGFloat,
-    rootView: V
-) -> NSView {
-    let shaped = rootView
-        .frame(width: width, height: height)
-        .background(Color.black)
-        .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: cornerRadius, bottomTrailingRadius: cornerRadius))
-
-    let hosting = NSHostingView(rootView: shaped)
-    hosting.frame = NSRect(x: 0, y: 0, width: width, height: height)
-    hosting.autoresizingMask = [.width, .height]
-    return hosting
 }
 
 // MARK: - Manager
@@ -80,17 +79,16 @@ final class RecordingOverlayManager {
     private var lockedOverlayWidth: CGFloat?
 
     var onStopButtonPressed: (() -> Void)?
+    var onCancelButtonPressed: (() -> Void)?
     var onUpdateOverlayPressed: (() -> Void)?
 
-    /// The screen the overlay should drop down on. The user picks one of
+    /// The screen the overlay should appear on. The user picks one of
     /// three modes in Settings, stored in UserDefaults under
     /// `overlay_display_id`:
     ///
     /// - `0` (default) — Active window: follows focus across monitors via
-    ///   NSScreen.main. Default for backward compatibility — the original
-    ///   behavior on a single-display setup is unchanged.
-    /// - `-1` — Primary display: always NSScreen.screens.first (the display
-    ///   designated as primary in System Settings → Displays).
+    ///   NSScreen.main.
+    /// - `-1` — Primary display: always NSScreen.screens.first.
     /// - any positive integer — specific NSScreen displayID. Falls back to
     ///   primary if that display is unplugged.
     private var targetScreen: NSScreen? {
@@ -108,23 +106,6 @@ final class RecordingOverlayManager {
         }
     }
 
-    private var screenHasNotch: Bool {
-        guard let screen = targetScreen else { return false }
-        return screen.safeAreaInsets.top > 0
-    }
-
-    private var notchWidth: CGFloat {
-        guard let screen = targetScreen, screenHasNotch else { return 0 }
-        guard let leftArea = screen.auxiliaryTopLeftArea,
-              let rightArea = screen.auxiliaryTopRightArea else { return 0 }
-        return screen.frame.width - leftArea.width - rightArea.width
-    }
-
-    private var notchOverlap: CGFloat {
-        guard let screen = targetScreen else { return 0 }
-        return screen.frame.maxY - screen.visibleFrame.maxY
-    }
-
     private var overlayAcceptsMouseEvents: Bool {
         (overlayState.phase == .recording && overlayState.recordingTriggerMode == .toggle)
             || overlayState.phase == .updateAvailable
@@ -137,7 +118,7 @@ final class RecordingOverlayManager {
             self.overlayState.isCommandMode = isCommandMode
             self.overlayState.recordingStartedAt = nil
             self.overlayState.phase = .initializing
-            self.overlayState.audioLevel = 0
+            self.resetLevels()
             self.showOverlayPanel(animatedResize: false)
         }
     }
@@ -154,7 +135,7 @@ final class RecordingOverlayManager {
             self.overlayState.isCommandMode = isCommandMode
             self.beginRecordingTimer(startedAt: startedAt, showsRecordingTimer: showsRecordingTimer)
             self.overlayState.phase = .recording
-            self.overlayState.audioLevel = 0
+            self.resetLevels()
             self.showOverlayPanel(animatedResize: true)
         }
     }
@@ -180,6 +161,11 @@ final class RecordingOverlayManager {
         overlayState.recordingStartedAt = startedAt
     }
 
+    private func resetLevels() {
+        overlayState.audioLevel = 0
+        overlayState.levelHistory = Array(repeating: 0, count: WisprIsland.barCount)
+    }
+
     func setRecordingTriggerMode(_ mode: RecordingTriggerMode, animated: Bool) {
         DispatchQueue.main.async {
             self.overlayState.recordingTriggerMode = mode
@@ -190,32 +176,40 @@ final class RecordingOverlayManager {
     func updateAudioLevel(_ level: Float) {
         DispatchQueue.main.async {
             self.overlayState.audioLevel = level
+            var history = self.overlayState.levelHistory
+            history.append(level)
+            if history.count > WisprIsland.barCount {
+                history.removeFirst(history.count - WisprIsland.barCount)
+            }
+            self.overlayState.levelHistory = history
         }
     }
 
     func showTranscribing() {
         DispatchQueue.main.async {
-            self.setTranscribingPhase()
+            self.lockedOverlayWidth = self.overlayWindow?.frame.width ?? self.overlayWidth
+            self.overlayState.phase = .transcribing
+            self.showOverlayPanel(animatedResize: true)
         }
     }
 
     func showFailureIndicator() {
         DispatchQueue.main.async {
-            self.showFeedbackPanel()
+            self.lockedOverlayWidth = nil
+            self.overlayState.phase = .feedback
+            self.showOverlayPanel(animatedResize: true)
         }
     }
 
     /// Maximum length of an in-pill error message. Anything longer is
     /// truncated with an ellipsis to keep the pill from stretching across
-    /// the menu bar; the full text remains available in `os_log` for
+    /// the screen; the full text remains available in `os_log` for
     /// forensic review.
     private static let maxToastMessageLength = 90
 
-    /// Surface a transient error in the menu-bar pill. The pill resizes to
+    /// Surface a transient error in the island. The pill resizes to
     /// fit the message (subject to the truncation cap), holds for a few
-    /// seconds, then dismisses. Intended for non-fatal user-facing errors
-    /// that previously only landed in `os_log` — rate limits, network
-    /// failures, permission gaps, etc.
+    /// seconds, then dismisses.
     func showError(_ message: String) {
         let truncated: String = {
             if message.count <= Self.maxToastMessageLength { return message }
@@ -272,21 +266,21 @@ final class RecordingOverlayManager {
         }
 
         let panel = makeOverlayPanel(width: frame.width, height: frame.height)
-        panel.hasShadow = false
         panel.ignoresMouseEvents = !overlayAcceptsMouseEvents
         panel.contentView = makeOverlayContent(frame: frame)
 
-        guard let screen = targetScreen else { return }
-
-        let hiddenFrame = NSRect(x: frame.origin.x, y: screen.frame.maxY, width: frame.width, height: frame.height)
-        panel.setFrame(hiddenFrame, display: true)
-        panel.alphaValue = 1
+        // Aparece desde unos puntos más abajo, con fundido.
+        var startFrame = frame
+        startFrame.origin.y -= 8
+        panel.setFrame(startFrame, display: true)
+        panel.alphaValue = 0
         panel.orderFrontRegardless()
 
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.18
-            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.34, 1.56, 0.64, 1.0)
+            context.duration = 0.2
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1.0, 0.36, 1.0)
             panel.animator().setFrame(frame, display: true)
+            panel.animator().alphaValue = 1
         }
 
         overlayWindow = panel
@@ -300,50 +294,19 @@ final class RecordingOverlayManager {
         resize(panel: panel, to: frame, animated: animated)
     }
 
-    private func setTranscribingPhase() {
-        lockedOverlayWidth = overlayWindow?.frame.width ?? overlayWidth
-        overlayState.phase = .transcribing
-        showOverlayPanel(animatedResize: true)
-    }
-
     private func makeOverlayContent(frame: NSRect) -> NSView {
-        if useWingedLayout {
-            // Winged layout: notch x-range stays solid black so the cutout masks it.
-            let rootView = WingedRecordingView(
-                state: overlayState,
-                leftWingWidth: activeWingWidth,
-                notchWidth: notchWidth,
-                rightWingWidth: activeWingWidth,
-                height: frame.height,
-                onStopButtonPressed: { [weak self] in
-                    self?.onStopButtonPressed?()
-                }
-            )
-            return makeNotchContent(
-                width: frame.width,
-                height: frame.height,
-                cornerRadius: 14,
-                rootView: AnyView(rootView)
-            )
-        }
-
-        return makeNotchContent(
-            width: frame.width,
-            height: frame.height,
-            cornerRadius: screenHasNotch ? 18 : 12,
-            rootView: AnyView(
-                RecordingOverlayView(
-                    state: overlayState,
-                    onStopButtonPressed: { [weak self] in
-                        self?.onStopButtonPressed?()
-                    },
-                    onUpdateOverlayPressed: { [weak self] in
-                        self?.onUpdateOverlayPressed?()
-                    }
-                )
-                .padding(.top, screenHasNotch ? notchOverlap : 0)
-            )
+        let root = WisprIslandView(
+            state: overlayState,
+            onStopButtonPressed: { [weak self] in self?.onStopButtonPressed?() },
+            onCancelButtonPressed: { [weak self] in self?.onCancelButtonPressed?() },
+            onUpdateOverlayPressed: { [weak self] in self?.onUpdateOverlayPressed?() }
         )
+        .frame(width: frame.width, height: frame.height)
+
+        let hosting = NSHostingView(rootView: root)
+        hosting.frame = NSRect(x: 0, y: 0, width: frame.width, height: frame.height)
+        hosting.autoresizingMask = [.width, .height]
+        return hosting
     }
 
     private func resize(panel: NSPanel, to frame: NSRect, animated: Bool) {
@@ -354,67 +317,22 @@ final class RecordingOverlayManager {
 
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.22
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1.0, 0.36, 1.0)
             panel.animator().setFrame(frame, display: true)
         }
     }
 
-    /// True iff the overlay renders as wings flanking the notch (notched display
-    /// + use_compact_overlay on). updateAvailable and error toasts still use
-    /// the drop-down pill.
-    private var useWingedLayout: Bool {
-        guard screenHasNotch else { return false }
-        let useCompact = (UserDefaults.standard.object(forKey: "use_compact_overlay") as? Bool) ?? true
-        guard useCompact else { return false }
-        switch overlayState.phase {
-        case .recording, .initializing, .transcribing:
-            return true
-        case .feedback:
-            return overlayState.errorMessage?.isEmpty ?? true
-        case .updateAvailable:
-            return false
-        }
-    }
-
-    /// Equal wings keep the overlay balanced around the camera cutout.
-    /// Recording needs just enough room for the timer on the left.
-    private var activeWingWidth: CGFloat {
-        overlayState.phase == .recording && overlayState.showsRecordingTimer ? 48 : 36
+    private var overlayHeight: CGFloat {
+        let showsButtons = overlayState.phase == .recording && overlayState.recordingTriggerMode == .toggle
+        return showsButtons ? 40 : 34
     }
 
     private var overlayFrame: NSRect {
         guard let screen = targetScreen else { return .zero }
-
-        if useWingedLayout {
-            // Anchor to the screen's auxiliary-area boundaries of the notch;
-            // panel height matches the menu-bar overlap so nothing protrudes below.
-            let nWidth = notchWidth
-            let nLeftX = screen.auxiliaryTopLeftArea?.maxX
-                ?? (screen.frame.midX - nWidth / 2)
-            let leftWing = activeWingWidth
-            let rightWing = activeWingWidth
-            let panelHeight = notchOverlap
-            let panelWidth = leftWing + nWidth + rightWing
-            let panelX = nLeftX - leftWing
-            let panelY = screen.frame.maxY - panelHeight
-            return NSRect(x: panelX, y: panelY, width: panelWidth, height: panelHeight)
-        }
-
         let width = overlayWidth
-        let useCompact = (UserDefaults.standard.object(forKey: "use_compact_overlay") as? Bool) ?? true
-        let forceDropDownPill = overlayState.phase == .feedback
-            && !(overlayState.errorMessage?.isEmpty ?? true)
-        // Compact mode: overlay sits flush with the menu bar on every display.
-        // notchOverlap equals the menu-bar height on non-notched screens too,
-        // so zero protrusion is universal — not notch-only. The legacy
-        // 38pt drop-down pill remains available when use_compact_overlay
-        // is explicitly toggled off. Error toasts also force the drop-down
-        // height so messages stay readable even when compact overlay is enabled.
-        let height: CGFloat = (useCompact && !forceDropDownPill)
-            ? notchOverlap
-            : 38 + (screenHasNotch ? notchOverlap : 0)
+        let height = overlayHeight
         let x = screen.frame.midX - width / 2
-        let y = screen.frame.maxY - height
+        let y = screen.visibleFrame.minY + WisprIsland.bottomMargin
         return NSRect(x: x, y: y, width: width, height: height)
     }
 
@@ -423,55 +341,24 @@ final class RecordingOverlayManager {
             return lockedOverlayWidth
         }
 
-        if overlayState.phase == .feedback {
-            // Error toasts size to the message length so short messages do
-            // not get the same wide pill as long ones. ~6.8pt per character
-            // plus 60pt of icon and padding chrome, clamped to 180-420pt so
-            // very short messages stay readable and very long ones do not
-            // stretch the pill across the menu bar. Bare failure-X marker
-            // (no message) keeps the original 92pt.
-            let feedbackWidth: CGFloat = {
-                guard let msg = overlayState.errorMessage, !msg.isEmpty else {
-                    return 92
+        switch overlayState.phase {
+        case .feedback:
+            guard let msg = overlayState.errorMessage, !msg.isEmpty else { return 64 }
+            // ~6.8 pt por carácter más 56 pt de icono y márgenes, entre 180 y 460 pt.
+            return min(460, max(180, CGFloat(msg.count) * 6.8 + 56))
+        case .updateAvailable:
+            return 168
+        case .initializing, .recording, .transcribing:
+            var width: CGFloat = 20 * 2 + CGFloat(WisprIsland.barCount) * (WisprIsland.barWidth + WisprIsland.barSpacing) - WisprIsland.barSpacing
+            if overlayState.phase == .recording {
+                if overlayState.recordingTriggerMode == .toggle {
+                    width += (WisprIsland.buttonSize + 8) * 2 - 16
                 }
-                let estimated = CGFloat(msg.count) * 6.8 + 60
-                return min(420, max(180, estimated))
-            }()
-            guard screenHasNotch else { return feedbackWidth }
-            return max(notchWidth, feedbackWidth)
+                if overlayState.showsRecordingTimer { width += 40 }
+                if overlayState.isCommandMode { width += 22 }
+            }
+            return width
         }
-
-        if overlayState.phase == .updateAvailable {
-            let updateWidth: CGFloat = 190
-            guard screenHasNotch else { return updateWidth }
-            return max(notchWidth, updateWidth)
-        }
-
-        let commandModeWidth: CGFloat = 180
-        let toggleWidth: CGFloat = 150
-        let defaultWidth: CGFloat = 92
-        let baseWidth: CGFloat
-
-        if overlayState.isCommandMode {
-            baseWidth = commandModeWidth
-        } else if overlayState.phase == .recording && overlayState.recordingTriggerMode == .toggle {
-            baseWidth = toggleWidth
-        } else {
-            baseWidth = defaultWidth
-        }
-
-        // Reserve separate leading, center, and trailing slots while recording.
-        let width = overlayState.phase == .recording && overlayState.showsRecordingTimer
-            ? max(baseWidth, overlayState.isCommandMode ? 224 : 180)
-            : baseWidth
-        guard screenHasNotch else { return width }
-        return max(notchWidth, width)
-    }
-
-    private func showFeedbackPanel() {
-        lockedOverlayWidth = nil
-        overlayState.phase = .feedback
-        showOverlayPanel(animatedResize: true)
     }
 
     private func dismissAll() {
@@ -479,119 +366,250 @@ final class RecordingOverlayManager {
         overlayState.recordingStartedAt = nil
         overlayState.isCommandMode = false
         overlayState.updateVersion = ""
-        if let panel = overlayWindow {
-            panel.orderOut(nil)
+        guard let panel = overlayWindow else { return }
+        overlayWindow = nil
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.14
+            panel.animator().alphaValue = 0
+        }, completionHandler: {
             // orderOut alone leaves the panel retained in NSApp.windows with its
             // SwiftUI hierarchy mounted — repeatForever animations keep flushing
             // Core Animation forever. Unmount and close so the panel deallocates.
+            panel.orderOut(nil)
             panel.contentView = nil
             panel.close()
-            overlayWindow = nil
-        }
+        })
     }
 }
 
-// MARK: - Winged Recording View
+// MARK: - Island View
 
-/// Wing layout: timer (or waveform) left, stop button right, black notch in the middle
-/// (the camera cutout masks those pixels).
-struct WingedRecordingView: View {
+struct WisprIslandView: View {
     @ObservedObject var state: RecordingOverlayState
-    let leftWingWidth: CGFloat
-    let notchWidth: CGFloat
-    let rightWingWidth: CGFloat
-    let height: CGFloat
     let onStopButtonPressed: () -> Void
+    let onCancelButtonPressed: () -> Void
+    let onUpdateOverlayPressed: () -> Void
 
-    private var showsLiveRecordingContent: Bool {
-        state.phase == .recording
-    }
-
-    private var showsStopButton: Bool {
-        showsLiveRecordingContent && state.recordingTriggerMode == .toggle
+    private var showsButtons: Bool {
+        state.phase == .recording && state.recordingTriggerMode == .toggle
     }
 
     var body: some View {
-        wingsHStack
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .animation(.spring(response: 0.28, dampingFraction: 1.0), value: state.phase)
+        ZStack {
+            Capsule(style: .continuous)
+                .fill(Color.black)
+            Capsule(style: .continuous)
+                .strokeBorder(WisprIsland.border, lineWidth: 1)
+
+            content
+                .padding(.horizontal, showsButtons ? 5 : 20)
+        }
+        .animation(.spring(response: 0.28, dampingFraction: 1.0), value: state.phase)
+        .animation(.spring(response: 0.28, dampingFraction: 1.0), value: state.recordingTriggerMode)
     }
 
-    private var wingsHStack: some View {
-        HStack(spacing: 0) {
-            // Left wing — empty during feedback so the right-wing X reads as the sole signal.
-            HStack(spacing: 0) {
-                Spacer(minLength: 0)
-                Group {
-                    if state.phase == .feedback {
-                        Color.clear
-                    } else if state.phase == .initializing {
-                        InitializingDotsView()
-                            .transition(.opacity)
-                    } else if showsLiveRecordingContent {
-                        VStack(spacing: 1) {
-                            if state.isCommandMode {
-                                Image(systemName: "pencil")
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundStyle(.white.opacity(0.92))
-                                    .transition(.opacity)
-                            }
-                            if state.showsRecordingTimer, let start = state.recordingStartedAt {
-                                RecordingElapsedTimeView(start: start)
-                            } else {
-                                CompactWaveformView(
-                                    audioLevel: state.audioLevel,
-                                    showsActivityPulse: true
-                                )
-                            }
-                        }
-                        .transition(.opacity)
-                    } else {
-                        CompactProcessingIndicatorView()
-                            .transition(.opacity)
-                    }
-                }
-                Spacer(minLength: 0)
+    @ViewBuilder
+    private var content: some View {
+        switch state.phase {
+        case .feedback:
+            if let message = state.errorMessage {
+                IslandErrorView(message: message)
+            } else {
+                IslandFailureIcon()
             }
-            .frame(width: leftWingWidth, height: height)
-
-            // Notch spacer — solid black; camera cutout hides it.
-            Color.black
-                .frame(width: notchWidth, height: height)
-
-            // Right wing — stop button or failure X, horizontally centered.
-            HStack {
-                Spacer(minLength: 0)
-                Group {
-                    if state.phase == .feedback {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 7, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 14, height: 14)
-                            .background(Circle().fill(Color.red.opacity(0.92)))
-                            .transition(.opacity)
-                    } else if showsStopButton {
-                        Button(action: onStopButtonPressed) {
-                            Image(systemName: "stop.fill")
-                                .font(.system(size: 7, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 14, height: 14)
-                                .background(Circle().fill(Color.red.opacity(0.92)))
-                        }
-                        .buttonStyle(.plain)
-                        .transition(.opacity)
-                    }
+        case .updateAvailable:
+            IslandUpdateView(onPress: onUpdateOverlayPressed)
+        case .initializing:
+            IslandDotsView()
+        case .transcribing:
+            IslandProcessingView()
+        case .recording:
+            HStack(spacing: 8) {
+                if showsButtons {
+                    IslandCircleButton(systemName: "xmark", action: onCancelButtonPressed)
+                        .accessibilityLabel("Cancel dictation")
                 }
-                Spacer(minLength: 0)
+                if state.isCommandMode {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.9))
+                }
+                if state.showsRecordingTimer, let start = state.recordingStartedAt {
+                    IslandElapsedTimeView(start: start)
+                }
+                IslandWaveformView(levels: state.levelHistory)
+                    .frame(maxWidth: .infinity)
+                if showsButtons {
+                    IslandCircleButton(systemName: "stop.fill", action: onStopButtonPressed)
+                        .accessibilityLabel("Stop dictation")
+                }
             }
-            .frame(width: rightWingWidth, height: height)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .animation(.spring(response: 0.28, dampingFraction: 1.0), value: state.phase)
     }
 }
 
-// MARK: - Waveform Views
+/// Botón circular de 30 pt con borde gris oscuro de la isla en modo manos libres.
+private struct IslandCircleButton: View {
+    let systemName: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: systemName == "stop.fill" ? 9 : 10, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: WisprIsland.buttonSize, height: WisprIsland.buttonSize)
+                .background(Circle().fill(Color.black))
+                .overlay(Circle().strokeBorder(WisprIsland.border, lineWidth: 1.5))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Waveform
+
+/// Barras blancas de 2 pt que se desplazan con el historial reciente del micrófono.
+struct IslandWaveformView: View {
+    let levels: [Float]
+
+    var body: some View {
+        HStack(spacing: WisprIsland.barSpacing) {
+            ForEach(Array(levels.enumerated()), id: \.offset) { index, level in
+                RoundedRectangle(cornerRadius: 1, style: .continuous)
+                    .fill(Color.white.opacity(0.4 + 0.6 * edgeFade(index)))
+                    .frame(width: WisprIsland.barWidth, height: height(for: level))
+            }
+        }
+        .frame(height: WisprIsland.maxBarHeight)
+        .animation(.easeOut(duration: 0.09), value: levels)
+    }
+
+    private func height(for level: Float) -> CGFloat {
+        let amplitude = CGFloat(min(max(level, 0), 1))
+        return WisprIsland.minBarHeight + (WisprIsland.maxBarHeight - WisprIsland.minBarHeight) * amplitude
+    }
+
+    /// Las barras de los extremos se atenúan un poco.
+    private func edgeFade(_ index: Int) -> Double {
+        let center = Double(levels.count - 1) / 2
+        guard center > 0 else { return 1 }
+        return 1 - pow(abs(Double(index) - center) / center, 2) * 0.8
+    }
+}
+
+/// Tres puntos de carga mientras arranca el micrófono.
+struct IslandDotsView: View {
+    @State private var activeDot = 0
+    @State private var timer: Timer?
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(0..<3, id: \.self) { index in
+                Circle()
+                    .fill(.white.opacity(activeDot == index ? 0.95 : 0.3))
+                    .frame(width: 4, height: 4)
+                    .animation(.easeInOut(duration: 0.3), value: activeDot)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            timer?.invalidate()
+            timer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: true) { _ in
+                DispatchQueue.main.async { activeDot = (activeDot + 1) % 3 }
+            }
+        }
+        .onDisappear {
+            timer?.invalidate()
+            timer = nil
+        }
+    }
+}
+
+/// Mientras se transcribe: barras bajas con una ola de brillo que las recorre.
+struct IslandProcessingView: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
+            let time = context.date.timeIntervalSinceReferenceDate
+            HStack(spacing: WisprIsland.barSpacing) {
+                ForEach(0..<WisprIsland.barCount, id: \.self) { index in
+                    let wave = 0.5 + 0.5 * sin(time * 5.0 - Double(index) * 0.45)
+                    RoundedRectangle(cornerRadius: 1, style: .continuous)
+                        .fill(Color.white.opacity(0.25 + 0.65 * wave))
+                        .frame(width: WisprIsland.barWidth, height: 3)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+private struct IslandElapsedTimeView: View {
+    let start: ContinuousClock.Instant
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            let seconds = max(0, start.duration(to: .now).components.seconds)
+            Text(String(format: "%lld:%02lld", seconds / 60, seconds % 60))
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.9))
+                .fixedSize()
+                .accessibilityLabel("Recording duration")
+                .accessibilityValue("\(seconds / 60) minutes, \(seconds % 60) seconds")
+        }
+    }
+}
+
+private struct IslandFailureIcon: View {
+    var body: some View {
+        Image(systemName: "xmark")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 18, height: 18)
+            .background(Circle().fill(WisprPalette.red))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Aviso de error dentro de la isla: icono rojo y mensaje.
+private struct IslandErrorView: View {
+    let message: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(WisprPalette.red)
+            Text(message)
+                .font(WisprFonts.figtree(12, weight: .medium))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .padding(.horizontal, 6)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+}
+
+private struct IslandUpdateView: View {
+    let onPress: () -> Void
+
+    var body: some View {
+        Button(action: onPress) {
+            HStack(spacing: 7) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("Update Available")
+                    .font(WisprFonts.figtree(12, weight: .semibold))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Waveform (prueba de micrófono en Setup)
 
 struct WaveformBar: View {
     let amplitude: CGFloat
@@ -670,468 +688,3 @@ struct WaveformView: View {
     }
 }
 
-/// Tighter 5-bar waveform sized for the 36pt wing layout.
-struct CompactWaveformView: View {
-    let audioLevel: Float
-    var showsActivityPulse = false
-
-    private static let barCount = 5
-    private static let multipliers: [CGFloat] = [0.5, 0.75, 1.0, 0.75, 0.5]
-    private static let centerIndex = CGFloat((barCount - 1) / 2)
-
-    var body: some View {
-        Group {
-            if showsActivityPulse {
-                TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
-                    bars(pulseTime: context.date.timeIntervalSinceReferenceDate)
-                }
-            } else {
-                bars(pulseTime: nil)
-            }
-        }
-        .frame(height: 18)
-    }
-
-    private func bars(pulseTime: TimeInterval?) -> some View {
-        HStack(spacing: 1.5) {
-            ForEach(0..<Self.barCount, id: \.self) { index in
-                CompactWaveformBar(amplitude: amplitude(for: index, pulseTime: pulseTime))
-                    .animation(
-                        .spring(response: 0.18, dampingFraction: 0.88),
-                        value: audioLevel
-                    )
-            }
-        }
-    }
-
-    private func amplitude(for index: Int, pulseTime: TimeInterval?) -> CGFloat {
-        let level = CGFloat(max(audioLevel, 0))
-        let base = min(level * Self.multipliers[index], 1.0)
-        guard let pulseTime else { return base }
-        let traveling = CGFloat(0.5 + 0.5 * sin((pulseTime * 6.2) - Double(index) * 0.78))
-        let shimmer = CGFloat(0.5 + 0.5 * sin((pulseTime * 3.1) + Double(index) * 0.5))
-        let pulse = traveling * 0.22 + shimmer * 0.06
-        let saturationRelief = base * (0.74 + pulse)
-        let quietPulse = (1.0 - base) * (0.04 + pulse * 0.28)
-        return min(saturationRelief + quietPulse, 1.0)
-    }
-}
-
-struct CompactWaveformBar: View {
-    let amplitude: CGFloat
-    private let minHeight: CGFloat = 2
-    private let maxHeight: CGFloat = 14
-
-    var body: some View {
-        Capsule()
-            .fill(.white)
-            .frame(width: 2, height: minHeight + (maxHeight - minHeight) * amplitude)
-    }
-}
-
-struct ProcessingWaveformView: View {
-    private static let barCount = 5
-    private static let centerIndex = CGFloat((barCount - 1) / 2)
-
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
-            let time = context.date.timeIntervalSinceReferenceDate
-
-            HStack(spacing: 4) {
-                ForEach(0..<Self.barCount, id: \.self) { index in
-                    ProcessingPill(
-                        amplitude: amplitude(for: index, time: time),
-                        opacity: opacity(for: index, time: time)
-                    )
-                }
-            }
-            .frame(height: 20)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func phase(for index: Int, time: TimeInterval) -> Double {
-        let cycle = 1.05
-        let stagger = 0.11
-        return ((time - Double(index) * stagger).truncatingRemainder(dividingBy: cycle)) / cycle
-    }
-
-    private func pulse(for index: Int, time: TimeInterval) -> CGFloat {
-        let phase = phase(for: index, time: time)
-        let wave = 0.5 + 0.5 * sin((phase * 2.0 * .pi) - (.pi / 2.0))
-        return CGFloat(pow(wave, 1.9))
-    }
-
-    private func amplitude(for index: Int, time: TimeInterval) -> CGFloat {
-        let centerDistance = abs(CGFloat(index) - Self.centerIndex) / Self.centerIndex
-        let baseline = 0.18 + (1.0 - centerDistance) * 0.1
-        return min(baseline + pulse(for: index, time: time) * 0.68, 1.0)
-    }
-
-    private func opacity(for index: Int, time: TimeInterval) -> CGFloat {
-        0.42 + pulse(for: index, time: time) * 0.52
-    }
-}
-
-private struct ProcessingPill: View {
-    let amplitude: CGFloat
-    let opacity: CGFloat
-
-    private let minHeight: CGFloat = 4
-    private let maxHeight: CGFloat = 18
-
-    var body: some View {
-        Capsule()
-            .fill(.white)
-            .frame(width: 4, height: minHeight + (maxHeight - minHeight) * amplitude)
-            .opacity(opacity)
-    }
-}
-
-struct ProcessingIndicatorView: View {
-    @State private var showsExtendedSpinner = false
-    @State private var rotation: Double = 0
-
-    var body: some View {
-        ZStack {
-            if showsExtendedSpinner {
-                Circle()
-                    .trim(from: 0.1, to: 0.9)
-                    .stroke(Color.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                    .frame(width: 16, height: 16)
-                    .rotationEffect(.degrees(rotation))
-                    .frame(height: 20)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .transition(.opacity)
-                    .onAppear {
-                        rotation = 0
-                        withAnimation(.linear(duration: 0.8).repeatForever(autoreverses: false)) {
-                            rotation = 360
-                        }
-                    }
-            } else {
-                ProcessingWaveformView()
-                    .transition(.opacity)
-            }
-        }
-        .task {
-            showsExtendedSpinner = false
-            do {
-                try await Task.sleep(nanoseconds: 1_000_000_000)
-                guard !Task.isCancelled else { return }
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    showsExtendedSpinner = true
-                }
-            } catch {}
-        }
-    }
-}
-
-/// Same hybrid waveform-then-spinner as `ProcessingIndicatorView`, sized to
-/// fit the 18pt winged menu-bar overlay. Uses tighter pills and a smaller
-/// spinner so the indicator stays inside the wing without the jolt to
-/// oversized capsules that the full-size indicator produced.
-struct CompactProcessingIndicatorView: View {
-    @State private var showsExtendedSpinner = false
-    @State private var rotation: Double = 0
-
-    var body: some View {
-        ZStack {
-            if showsExtendedSpinner {
-                Circle()
-                    .trim(from: 0.1, to: 0.9)
-                    .stroke(Color.white, style: StrokeStyle(lineWidth: 2.0, lineCap: .round))
-                    .frame(width: 12, height: 12)
-                    .rotationEffect(.degrees(rotation))
-                    .frame(height: 18)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .transition(.opacity)
-                    .onAppear {
-                        rotation = 0
-                        withAnimation(.linear(duration: 0.8).repeatForever(autoreverses: false)) {
-                            rotation = 360
-                        }
-                    }
-            } else {
-                CompactProcessingWaveformView()
-                    .transition(.opacity)
-            }
-        }
-        .task {
-            showsExtendedSpinner = false
-            do {
-                try await Task.sleep(nanoseconds: 1_000_000_000)
-                guard !Task.isCancelled else { return }
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    showsExtendedSpinner = true
-                }
-            } catch {}
-        }
-    }
-}
-
-struct CompactProcessingWaveformView: View {
-    private static let barCount = 5
-    private static let centerIndex = CGFloat((barCount - 1) / 2)
-
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
-            let time = context.date.timeIntervalSinceReferenceDate
-            HStack(spacing: 2) {
-                ForEach(0..<Self.barCount, id: \.self) { index in
-                    CompactProcessingPill(
-                        amplitude: amplitude(for: index, time: time),
-                        opacity: opacity(for: index, time: time)
-                    )
-                }
-            }
-            .frame(height: 18)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func phase(for index: Int, time: TimeInterval) -> Double {
-        let cycle = 1.05
-        let stagger = 0.11
-        return ((time - Double(index) * stagger).truncatingRemainder(dividingBy: cycle)) / cycle
-    }
-
-    private func pulse(for index: Int, time: TimeInterval) -> CGFloat {
-        let phase = phase(for: index, time: time)
-        let wave = 0.5 + 0.5 * sin((phase * 2.0 * .pi) - (.pi / 2.0))
-        return CGFloat(pow(wave, 1.9))
-    }
-
-    private func amplitude(for index: Int, time: TimeInterval) -> CGFloat {
-        let centerDistance = abs(CGFloat(index) - Self.centerIndex) / Self.centerIndex
-        let baseline = 0.18 + (1.0 - centerDistance) * 0.1
-        return min(baseline + pulse(for: index, time: time) * 0.68, 1.0)
-    }
-
-    private func opacity(for index: Int, time: TimeInterval) -> CGFloat {
-        0.42 + pulse(for: index, time: time) * 0.52
-    }
-}
-
-private struct CompactProcessingPill: View {
-    let amplitude: CGFloat
-    let opacity: CGFloat
-
-    private let minHeight: CGFloat = 2
-    private let maxHeight: CGFloat = 12
-
-    var body: some View {
-        Capsule()
-            .fill(.white)
-            .frame(width: 2, height: minHeight + (maxHeight - minHeight) * amplitude)
-            .opacity(opacity)
-    }
-}
-
-struct InitializingDotsView: View {
-    @State private var activeDot = 0
-    @State private var timer: Timer?
-
-    var body: some View {
-        HStack(spacing: 4) {
-            ForEach(0..<3, id: \.self) { index in
-                Circle()
-                    .fill(.white.opacity(activeDot == index ? 0.9 : 0.25))
-                    .frame(width: 4.5, height: 4.5)
-                    .animation(.easeInOut(duration: 0.4), value: activeDot)
-            }
-        }
-        .onAppear {
-            timer?.invalidate()
-            timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
-                DispatchQueue.main.async {
-                    activeDot = (activeDot + 1) % 3
-                }
-            }
-        }
-        .onDisappear {
-            timer?.invalidate()
-            timer = nil
-        }
-    }
-}
-
-struct RecordingOverlayView: View {
-    @ObservedObject var state: RecordingOverlayState
-    let onStopButtonPressed: () -> Void
-    let onUpdateOverlayPressed: () -> Void
-
-    private var leadingAccessoryWidth: CGFloat {
-        guard showsLiveRecordingContent && state.showsRecordingTimer else { return 24 }
-        return state.isCommandMode ? 72 : 48
-    }
-    private let trailingAccessoryWidth: CGFloat = 32
-
-    private var showsLiveRecordingContent: Bool {
-        state.phase == .recording
-    }
-
-    private var showsStopButton: Bool {
-        showsLiveRecordingContent && state.recordingTriggerMode == .toggle
-    }
-
-    var body: some View {
-        Group {
-            if state.phase == .feedback, let message = state.errorMessage {
-                ErrorOverlayView(message: message)
-            } else if state.phase == .feedback {
-                FailureIndicatorView()
-            } else if state.phase == .updateAvailable {
-                UpdateAvailableOverlayView(onPress: onUpdateOverlayPressed)
-            } else {
-                ZStack {
-                    Group {
-                        if state.phase == .initializing {
-                            InitializingDotsView()
-                                .transition(.opacity)
-                        } else if showsLiveRecordingContent {
-                            if state.showsRecordingTimer, let start = state.recordingStartedAt {
-                                RecordingElapsedTimeView(start: start)
-                                    .transition(.opacity)
-                            } else {
-                                WaveformView(audioLevel: state.audioLevel, showsActivityPulse: true)
-                                    .transition(.opacity)
-                            }
-                        } else {
-                            ProcessingIndicatorView()
-                                .transition(.opacity)
-                        }
-                    }
-
-                    HStack {
-                        Group {
-                            if showsLiveRecordingContent && state.showsRecordingTimer {
-                                HStack(spacing: 6) {
-                                    if state.isCommandMode {
-                                        CommandModeIndicator()
-                                    }
-                                    WaveformView(
-                                        audioLevel: state.audioLevel,
-                                        showsActivityPulse: true
-                                    )
-                                }
-                                .transition(.opacity)
-                            } else if state.isCommandMode {
-                                CommandModeIndicator()
-                                    .transition(.opacity)
-                            }
-                        }
-                        .frame(width: leadingAccessoryWidth, alignment: .center)
-                        .frame(maxHeight: .infinity, alignment: .center)
-
-                        Spacer(minLength: 0)
-
-                        Group {
-                            if showsStopButton {
-                                Button(action: onStopButtonPressed) {
-                                    Image(systemName: "stop.fill")
-                                        .font(.system(size: 7, weight: .bold))
-                                        .foregroundStyle(.white)
-                                        .frame(width: 14, height: 14)
-                                        .background(Circle().fill(Color.red.opacity(0.92)))
-                                }
-                                .buttonStyle(.plain)
-                                .transition(.move(edge: .trailing).combined(with: .opacity))
-                            }
-                        }
-                        .frame(width: trailingAccessoryWidth, alignment: .trailing)
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, 12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .animation(.spring(response: 0.28, dampingFraction: 1.0), value: state.phase)
-        .animation(.spring(response: 0.28, dampingFraction: 1.0), value: state.recordingTriggerMode)
-        .animation(.spring(response: 0.28, dampingFraction: 1.0), value: state.isCommandMode)
-    }
-}
-
-/// The manager owns the start instant so rebuilding the overlay or switching
-/// from hold to toggle mode cannot reset the elapsed time. A monotonic clock
-/// also keeps system clock adjustments from changing the displayed duration.
-private struct RecordingElapsedTimeView: View {
-    let start: ContinuousClock.Instant
-
-    var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { _ in
-            let seconds = max(0, start.duration(to: .now).components.seconds)
-            Text(String(format: "%lld:%02lld", seconds / 60, seconds % 60))
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.9))
-                .fixedSize()
-                .frame(minWidth: 40)
-                .accessibilityLabel("Recording duration")
-                .accessibilityValue("\(seconds / 60) minutes, \(seconds % 60) seconds")
-        }
-    }
-}
-
-// MARK: - Transcribing Indicator
-
-struct CommandModeIndicator: View {
-    var body: some View {
-        Image(systemName: "pencil")
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.92))
-            .frame(width: 16, height: 16, alignment: .center)
-    }
-}
-
-struct FailureIndicatorView: View {
-    var body: some View {
-        Image(systemName: "xmark")
-            .font(.system(size: 12, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: 20, height: 20)
-            .background(Circle().fill(Color.red.opacity(0.92)))
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-/// In-pill error toast. Red exclamation icon plus the message text,
-/// rendered inside the standard menu-bar pill. Sized by the manager's
-/// `overlayWidth` based on message length.
-struct ErrorOverlayView: View {
-    let message: String
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "exclamationmark.circle.fill")
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(Color.red.opacity(0.92))
-            Text(message)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .truncationMode(.tail)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-    }
-}
-
-struct UpdateAvailableOverlayView: View {
-    let onPress: () -> Void
-
-    var body: some View {
-        Button(action: onPress) {
-            HStack(spacing: 7) {
-                Image(systemName: "arrow.down.circle.fill")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
-
-                Text("Update Available")
-                    .font(.system(size: 11, weight: .semibold))
-                    .lineLimit(1)
-            }
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .buttonStyle(.plain)
-    }
-}

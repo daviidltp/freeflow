@@ -12,6 +12,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ProcessInfo.processInfo.disableSuddenTermination()
 
         NetworkMonitor.shared.start()
+        WisprFonts.registerIfNeeded()
 
         NotificationCenter.default.addObserver(
             self,

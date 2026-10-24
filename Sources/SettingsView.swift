@@ -522,7 +522,6 @@ struct GeneralSettingsView: View {
     @Environment(\.openURL) private var openURL
     @AppStorage("show_menu_bar_icon") private var showMenuBarIcon = true
     @AppStorage("overlay_display_id") private var overlayDisplayID = 0
-    @AppStorage("use_compact_overlay") private var useCompactOverlay = true
     @AppStorage(RecordingTimerPreference.storageKey) private var showRecordingTimer = RecordingTimerPreference.defaultEnabled
     @State private var screensVersion = 0
     @State private var apiDraft = APIConfigurationDraft()
@@ -1129,21 +1128,8 @@ struct GeneralSettingsView: View {
 
     private var overlaySection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            OverlayStyleOptionRow(
-                title: "Minimalist menu-bar overlay",
-                subtitle: "Two slim wings flank the camera notch and stay inside the menu bar. Never covers app tabs or toolbars.",
-                isMinimalist: true,
-                selection: $useCompactOverlay
-            )
-            OverlayStyleOptionRow(
-                title: "Drop-down pill",
-                subtitle: "Single pill hangs below the menu bar during recording. Larger and more visible, but covers a thin strip of whatever app is active.",
-                isMinimalist: false,
-                selection: $useCompactOverlay
-            )
-
             Toggle("Show recording timer", isOn: $showRecordingTimer)
-            Text("When off, the minimalist overlay shows a waveform instead of the timer, and the drop-down pill hides the timer. Applies to the next recording.")
+            Text("Adds a timer to the left of the waveform in the floating island. Applies to the next recording.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

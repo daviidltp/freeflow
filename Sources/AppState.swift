@@ -845,6 +845,11 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 self?.handleOverlayStopButtonPressed()
             }
         }
+        overlayManager.onCancelButtonPressed = { [weak self] in
+            DispatchQueue.main.async {
+                self?.cancelToggleShortcutSession()
+            }
+        }
         overlayManager.onUpdateOverlayPressed = { [weak self] in
             DispatchQueue.main.async {
                 self?.handleUpdateOverlayPressed()
@@ -2537,6 +2542,11 @@ final class AppState: ObservableObject, @unchecked Sendable {
     func playAlertSound(named name: String) {
         guard alertSoundsEnabled else { return }
 
+        if let replacement = WisprSound.replacement(forLegacyName: name) {
+            replacement.play(volume: soundVolume)
+            return
+        }
+
         let sound = NSSound(named: name)
         sound?.volume = soundVolume
         sound?.play()
@@ -3553,6 +3563,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
     /// Posts Cmd-V to a PID, or globally when nil; this sender does not validate field identity.
     private func pasteAtCursor(processIdentifier: pid_t? = nil) {
+        if alertSoundsEnabled { WisprSound.paste.play(volume: soundVolume) }
         let source = CGEventSource(stateID: .hidSystemState)
         let vKeyCode = keyCodeForCharacter("v") ?? 9
 
