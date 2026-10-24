@@ -101,6 +101,8 @@ private struct InsightsContent: View {
                     .frame(maxWidth: .infinity)
             }
             .fixedSize(horizontal: false, vertical: true)
+
+            GroqUsageCard(stats: stats)
         }
     }
 
@@ -514,5 +516,111 @@ private struct TopWordsCard: View {
         }
         .padding(22)
         .insightsCardBackground()
+    }
+}
+
+
+// MARK: - Groq (plan gratuito)
+
+/// Lo que Groq permite medir: peticiones que quedan hoy (cabeceras de respuesta) y el audio
+/// que llevas contra los topes del plan gratuito (calculado con tus propios dictados).
+/// Groq no ofrece ninguna API de gasto ni de crédito.
+private struct GroqUsageCard: View {
+    @ObservedObject var stats: DictationStatsStore
+    @ObservedObject private var usage = GroqUsageStore.shared
+
+    var body: some View {
+        let now = Date()
+        let hourSeconds = stats.audioSeconds(since: now.addingTimeInterval(-3600))
+        let daySeconds = stats.audioSeconds(since: now.addingTimeInterval(-86_400))
+        VStack(alignment: .leading, spacing: 22) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Groq")
+                    .font(WisprFonts.figtree(24, weight: .medium))
+                    .foregroundStyle(WisprPalette.foreground)
+                Spacer()
+                Text("FREE PLAN")
+                    .font(WisprFonts.figtree(11, weight: .medium))
+                    .tracking(1)
+                    .foregroundStyle(WisprPalette.mutedForeground)
+            }
+
+            meter(
+                title: "Requests left today",
+                value: requestsValue(now: now),
+                fraction: requestsFraction(now: now),
+                detail: resetDetail(now: now)
+            )
+            meter(
+                title: "Audio, last 24 hours",
+                value: "\(Self.minutes(daySeconds)) of \(Self.minutes(GroqFreePlanLimits.audioSecondsPerDay)) min",
+                fraction: daySeconds / GroqFreePlanLimits.audioSecondsPerDay,
+                detail: nil
+            )
+            meter(
+                title: "Audio, last hour",
+                value: "\(Self.minutes(hourSeconds)) of \(Self.minutes(GroqFreePlanLimits.audioSecondsPerHour)) min",
+                fraction: hourSeconds / GroqFreePlanLimits.audioSecondsPerHour,
+                detail: nil
+            )
+
+            Text("Groq doesn't expose spend or credit through its API, so those only appear in your Groq console. Audio is counted from your own recordings.")
+                .font(WisprFonts.figtree(12))
+                .foregroundStyle(WisprPalette.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(22)
+        .insightsCardBackground()
+    }
+
+    private func requestsValue(now: Date) -> String {
+        guard let snapshot = usage.snapshot else { return "Dictate once to load" }
+        return "\(snapshot.remaining(at: now).formatted()) of \(snapshot.limitRequests.formatted())"
+    }
+
+    /// Fracción ya usada, para que todas las barras se lean igual (más llena = más gastado).
+    private func requestsFraction(now: Date) -> Double {
+        guard let snapshot = usage.snapshot, snapshot.limitRequests > 0 else { return 0 }
+        return 1 - Double(snapshot.remaining(at: now)) / Double(snapshot.limitRequests)
+    }
+
+    private func resetDetail(now: Date) -> String? {
+        guard let seconds = usage.snapshot?.secondsUntilReset(at: now), seconds > 0 else { return nil }
+        let hours = Int(seconds) / 3600
+        let minutes = (Int(seconds) % 3600) / 60
+        return hours > 0 ? "Resets in \(hours) h \(minutes) min" : "Resets in \(minutes) min"
+    }
+
+    private static func minutes(_ seconds: Double) -> String {
+        Int((seconds / 60).rounded()).formatted()
+    }
+
+    private func meter(title: String, value: String, fraction: Double, detail: String?) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title)
+                    .font(WisprFonts.figtree(14))
+                    .foregroundStyle(WisprPalette.foreground)
+                Spacer()
+                Text(value)
+                    .font(WisprFonts.figtree(14, weight: .semibold))
+                    .foregroundStyle(WisprPalette.foreground)
+            }
+            GeometryReader { geometry in
+                let clamped = min(max(fraction, 0), 1)
+                ZStack(alignment: .leading) {
+                    Capsule().fill(WisprPalette.backgroundTertiary)
+                    Capsule()
+                        .fill(clamped > 0.85 ? WisprPalette.red : WisprPalette.teal700)
+                        .frame(width: clamped == 0 ? 0 : max(6, geometry.size.width * clamped))
+                }
+            }
+            .frame(height: 8)
+            if let detail {
+                Text(detail)
+                    .font(WisprFonts.figtree(12))
+                    .foregroundStyle(WisprPalette.mutedForeground)
+            }
+        }
     }
 }

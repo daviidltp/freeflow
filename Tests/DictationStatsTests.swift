@@ -44,6 +44,23 @@ enum DictationStatsTests {
         TestSupport.expectEqual(UsageCategory.category(appName: "Claude", bundleIdentifier: nil), .aiPrompts)
         TestSupport.expectEqual(UsageCategory.category(appName: "Figma", bundleIdentifier: nil), .other)
 
+        TestSupport.expectEqual(store.audioSeconds(since: now.addingTimeInterval(-day / 2)), 30)
+        TestSupport.expectEqual(store.audioSeconds(since: now.addingTimeInterval(-2 * day)), 60)
+
+        TestSupport.expectEqual(GroqRateLimitParser.seconds(fromDuration: "2m59.56s"), 179.56)
+        TestSupport.expectEqual(GroqRateLimitParser.seconds(fromDuration: "7.66s"), 7.66)
+        TestSupport.expectEqual(GroqRateLimitParser.seconds(fromDuration: "1h2m"), 3720)
+        TestSupport.expect(GroqRateLimitParser.seconds(fromDuration: "abc") == nil, "Duración inválida")
+        let headers = [
+            "x-ratelimit-limit-requests": "2000",
+            "x-ratelimit-remaining-requests": "1990",
+            "x-ratelimit-reset-requests": "10m0s",
+        ]
+        let snapshot = GroqRateLimitParser.snapshot(header: { headers[$0] }, now: now)
+        TestSupport.expectEqual(snapshot?.remaining(at: now), 1990)
+        TestSupport.expectEqual(snapshot?.remaining(at: now.addingTimeInterval(700)), 2000)
+        TestSupport.expect(GroqRateLimitParser.snapshot(header: { _ in nil }) == nil, "Sin cabeceras no hay lectura")
+
         // Si hoy aún no se ha dictado, la racha de ayer sigue viva; si falta un día entero, se rompe.
         TestSupport.expectEqual(store.currentStreak(now: now.addingTimeInterval(day)), 3)
         TestSupport.expectEqual(store.currentStreak(now: now.addingTimeInterval(2 * day)), 0)

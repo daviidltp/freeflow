@@ -211,6 +211,8 @@ class TranscriptionService {
             throw TranscriptionError.submissionFailed("No response from server")
         }
 
+        GroqUsageStore.shared.record(response: httpResponse, host: baseURL.host)
+
         guard httpResponse.statusCode == 200 else {
             let responseBody = String(data: data, encoding: .utf8) ?? ""
             os_log(

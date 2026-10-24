@@ -178,6 +178,13 @@ final class DictationStatsStore: ObservableObject {
 
     var dictationCount: Int { entries.count }
 
+    /// Segundos de audio grabados desde `date` (solo dictados con duración conocida).
+    func audioSeconds(since date: Date) -> Double {
+        entries.reduce(0) { total, entry in
+            entry.date >= date ? total + (entry.seconds ?? 0) : total
+        }
+    }
+
     /// Palabras de cada uno de los últimos `days` días (el último elemento es hoy).
     func wordsByDay(days: Int, now: Date = Date()) -> [(day: Date, words: Int)] {
         let today = calendar.startOfDay(for: now)
