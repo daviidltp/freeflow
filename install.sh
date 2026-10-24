@@ -14,9 +14,20 @@ APP_NAME="FreeFlow"
 BUNDLE_ID="com.zachlatta.freeflow"
 DEST="/Applications/$APP_NAME.app"
 
+# Firma con tu certificado de Apple Development para que la firma sea la misma en cada
+# compilación y macOS conserve los permisos (Accesibilidad, micrófono). Sin él, firma ad-hoc.
+SIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
+if [ -z "$SIGN_IDENTITY" ]; then
+    if security find-identity -p codesigning | grep -q "Apple Development: David Lopez"; then
+        SIGN_IDENTITY="Apple Development: David Lopez"
+    else
+        SIGN_IDENTITY="-"
+    fi
+fi
+
 echo "Compilando $APP_NAME para $(uname -m)..."
 make clean >/dev/null
-make ARCH="$(uname -m)" APP_NAME="$APP_NAME" BUNDLE_ID="$BUNDLE_ID" CODESIGN_IDENTITY=-
+make ARCH="$(uname -m)" APP_NAME="$APP_NAME" BUNDLE_ID="$BUNDLE_ID" CODESIGN_IDENTITY="$SIGN_IDENTITY"
 
 osascript -e "tell application \"$APP_NAME\" to quit" >/dev/null 2>&1 || true
 
