@@ -4,7 +4,7 @@ import ServiceManagement
 
 // MARK: - Shared Helpers
 
-private struct SettingsCard<Content: View>: View {
+struct SettingsCard<Content: View>: View {
     let title: String
     let icon: String
     let content: Content
@@ -16,18 +16,21 @@ private struct SettingsCard<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label(title, systemImage: icon)
-                .font(.headline)
+        VStack(alignment: .leading, spacing: 14) {
+            Text(title)
+                .font(WisprFonts.figtree(15, weight: .semibold))
+                .foregroundStyle(WisprPalette.foreground)
             content
         }
-        .padding(16)
+        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
-        .cornerRadius(10)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(WisprPalette.card)
+        )
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(WisprPalette.border, lineWidth: 1)
         )
     }
 }
@@ -407,68 +410,147 @@ struct SettingsView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(SettingsTab.visibleCases) { tab in
-                    Button {
-                        appState.selectedSettingsTab = tab
-                    } label: {
-                        SettingsSidebarRow(title: tab.title, icon: tab.icon)
-                            .background(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(appState.selectedSettingsTab == tab
-                                          ? Color.accentColor.opacity(0.15)
-                                          : Color.clear)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                Spacer()
-            }
-            .padding(10)
-            .frame(width: 180)
-            .background(Color(nsColor: .windowBackgroundColor))
-
-            Divider()
+            MainSidebar()
+                .frame(width: 216)
 
             Group {
                 switch appState.selectedSettingsTab {
-                case .general, .none:
-                    GeneralSettingsView()
-                case .prompts:
-                    PromptsSettingsView()
-                case .macros:
+                case .home, .none:
+                    HomeView()
+                case .dictionary:
+                    DictionaryView()
+                case .snippets:
                     VoiceMacrosSettingsView()
+                case .style:
+                    PromptsSettingsView()
                 case .runLog:
                     RunLogView()
+                case .settings:
+                    GeneralSettingsView()
                 case .debug:
                     DebugSettingsView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(WisprPalette.background)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(WisprPalette.border, lineWidth: 1)
+            )
+            .padding(.top, 8)
+            .padding(.trailing, 8)
+            .padding(.bottom, 8)
+        }
+        .background(WisprPalette.backgroundSecondary)
+        .font(WisprFonts.figtree(13))
+        .tint(WisprPalette.foreground)
+    }
+}
+
+/// Barra lateral: logo de la app, secciones principales y Settings abajo.
+private struct MainSidebar: View {
+    @EnvironmentObject var appState: AppState
+
+    private let mainTabs: [SettingsTab] = [.home, .dictionary, .snippets, .style, .runLog]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 10) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 28, height: 28)
+                Text(AppName.displayName)
+                    .font(WisprFonts.figtree(17, weight: .semibold))
+                    .foregroundStyle(WisprPalette.foreground)
+            }
+            .padding(.leading, 12)
+            .padding(.top, 38)
+            .padding(.bottom, 22)
+
+            ForEach(mainTabs) { tab in
+                row(tab)
+            }
+
+            Spacer()
+
+            if AppBuild.isDevBundle {
+                row(.debug)
+            }
+            row(.settings)
+        }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 12)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func row(_ tab: SettingsTab) -> some View {
+        let isSelected = (appState.selectedSettingsTab ?? .home) == tab
+        return Button {
+            appState.selectedSettingsTab = tab
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: tab.icon)
+                    .font(.system(size: 14, weight: .regular))
+                    .frame(width: 18, height: 18)
+                Text(tab.title)
+                    .font(WisprFonts.figtree(14, weight: isSelected ? .semibold : .medium))
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(isSelected ? WisprPalette.foreground : WisprPalette.mutedForeground)
+            .padding(.horizontal, 12)
+            .frame(height: 36)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(isSelected ? WisprPalette.backgroundTertiary : Color.clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Cabecera de página con título en serif y acción opcional a la derecha.
+struct PageHeader<Trailing: View>: View {
+    let title: String
+    let subtitle: String?
+    let trailing: Trailing
+
+    init(_ title: String, subtitle: String? = nil, @ViewBuilder trailing: () -> Trailing = { EmptyView() }) {
+        self.title = title
+        self.subtitle = subtitle
+        self.trailing = trailing()
+    }
+
+    var body: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(WisprFonts.serif(34, weight: .medium))
+                    .foregroundStyle(WisprPalette.foreground)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(WisprFonts.figtree(14))
+                        .foregroundStyle(WisprPalette.mutedForeground)
+                }
+            }
+            Spacer(minLength: 12)
+            trailing
         }
     }
 }
 
-private struct SettingsSidebarRow: View {
-    let title: String
-    let icon: String
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: icon)
-                .font(.system(size: 13, weight: .regular))
-                .frame(width: 16, height: 16, alignment: .center)
-                .foregroundStyle(.primary)
-
-            Text(title)
-                .font(.body)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(height: 16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 8)
-        .padding(.horizontal, 10)
+/// Botón principal: pill negro con texto claro (invertido en modo oscuro).
+struct WisprPrimaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(WisprFonts.figtree(13, weight: .semibold))
+            .foregroundStyle(WisprPalette.background)
+            .padding(.horizontal, 16)
+            .frame(height: 34)
+            .background(Capsule().fill(WisprPalette.foreground))
+            .opacity(configuration.isPressed ? 0.8 : 1)
     }
 }
 
@@ -480,8 +562,7 @@ struct DebugSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Debug")
-                    .font(.largeTitle.bold())
+                PageHeader("Debug")
 
                 SettingsCard("Overlay", icon: "wrench.and.screwdriver") {
                     VStack(alignment: .leading, spacing: 12) {
@@ -529,15 +610,11 @@ struct GeneralSettingsView: View {
     @State private var isValidatingKey = false
     @State private var keyValidationError: String?
     @State private var successfulAPIConfiguration: ValidatedAPIConfiguration?
-    @State private var customVocabularyInput: String = ""
-    @FocusState private var customVocabularyFocused: Bool
     @State private var micPermissionGranted = false
     @State private var showMutedHint = false
     @State private var copiedBuildInfo = false
     @State private var copiedBuildInfoResetWorkItem: DispatchWorkItem?
-    @StateObject private var githubCache = GitHubMetadataCache.shared
     @ObservedObject private var updateManager = UpdateManager.shared
-    private let freeflowRepoURL = URL(string: "https://github.com/zachlatta/freeflow")!
 
     private var appDisplayName: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
@@ -577,122 +654,7 @@ struct GeneralSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
-                // App branding header
-                VStack(spacing: 12) {
-                    Image(nsImage: NSApp.applicationIconImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 64, height: 64)
-
-                    Text(AppName.displayName)
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-
-                    Text("v\(appVersion)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    // GitHub card
-                    VStack(spacing: 10) {
-                        HStack(spacing: 8) {
-                            AsyncImage(url: URL(string: "https://avatars.githubusercontent.com/u/992248")) { phase in
-                                switch phase {
-                                case .success(let image):
-                                    image.resizable().aspectRatio(contentMode: .fill)
-                                default:
-                                    Color.gray.opacity(0.2)
-                                }
-                            }
-                            .frame(width: 22, height: 22)
-                            .clipShape(Circle())
-
-                            Button {
-                                openURL(freeflowRepoURL)
-                            } label: {
-                                Text("zachlatta/freeflow")
-                                    .font(.system(.caption, design: .monospaced).weight(.medium))
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.blue)
-
-                            Spacer()
-
-                            HStack(spacing: 4) {
-                                Image(systemName: "star.fill")
-                                    .foregroundStyle(.yellow)
-                                    .font(.caption2)
-                                if githubCache.isLoading {
-                                    ProgressView().scaleEffect(0.5)
-                                } else if let count = githubCache.starCount {
-                                    Text("\(count.formatted()) \(count == 1 ? "star" : "stars")")
-                                        .font(.caption2.weight(.semibold))
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Capsule().fill(Color.yellow.opacity(0.14)))
-
-                            Button {
-                                openURL(freeflowRepoURL)
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "star")
-                                    Text("Star")
-                                }
-                                .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 5)
-                                .background(Capsule().fill(Color.yellow.opacity(0.18)))
-                            }
-                            .buttonStyle(.plain)
-                        }
-
-                        if !githubCache.recentStargazers.isEmpty {
-                            Divider()
-                            HStack(spacing: 8) {
-                                HStack(spacing: -6) {
-                                    ForEach(githubCache.recentStargazers) { star in
-                                        Button {
-                                            openURL(star.user.htmlUrl)
-                                        } label: {
-                                            AsyncImage(url: star.user.avatarThumbnailUrl) { phase in
-                                                switch phase {
-                                                case .success(let image):
-                                                    image.resizable().aspectRatio(contentMode: .fill)
-                                                default:
-                                                    Color.gray.opacity(0.2)
-                                                }
-                                            }
-                                            .frame(width: 22, height: 22)
-                                            .clipShape(Circle())
-                                            .overlay(Circle().stroke(Color(nsColor: .windowBackgroundColor), lineWidth: 1.5))
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-                                }
-                                .clipped()
-                                Text("recently starred")
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                                    .fixedSize()
-                                Spacer()
-                            }
-                            .clipped()
-                        }
-                    }
-                    .padding(12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(.ultraThinMaterial)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-                            )
-                    )
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.top, 4)
-                .padding(.bottom, 4)
+                PageHeader("Settings")
 
                 SettingsCard("App", icon: "power") {
                     startupSection
@@ -733,9 +695,6 @@ struct GeneralSettingsView: View {
                 SettingsCard("Sound Volume", icon: "speaker.wave.2.fill") {
                     soundVolumeSection
                 }
-                SettingsCard("Custom Vocabulary", icon: "text.book.closed.fill") {
-                    vocabularySection
-                }
                 SettingsCard("Permissions", icon: "lock.shield.fill") {
                     permissionsSection
                 }
@@ -750,14 +709,11 @@ struct GeneralSettingsView: View {
             isValidatingKey = false
             keyValidationError = nil
             successfulAPIConfiguration = nil
-            customVocabularyInput = appState.customVocabulary
             checkMicPermission()
             appState.refreshLaunchAtLoginStatus()
-            Task { await githubCache.fetchIfNeeded() }
         }
         .onDisappear {
             apiDraft.dismiss()
-            commitCustomVocabulary()
         }
         .onChange(of: appState.committedAPIConfiguration) { saved in
             apiDraft.reconcile(saved)
@@ -1392,39 +1348,6 @@ struct GeneralSettingsView: View {
         }
     }
 
-    // MARK: Custom Vocabulary
-
-    private func commitCustomVocabulary() {
-        let trimmed = customVocabularyInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        if appState.customVocabulary != trimmed {
-            appState.customVocabulary = trimmed
-        }
-    }
-
-    private var vocabularySection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Words and phrases to preserve during post-processing.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            TextEditor(text: $customVocabularyInput)
-                .font(.system(.body, design: .monospaced))
-                .frame(minHeight: 80, maxHeight: 140)
-                .focused($customVocabularyFocused)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
-                )
-                .onChange(of: customVocabularyFocused) { focused in
-                    if !focused { commitCustomVocabulary() }
-                }
-
-            Text("Separate entries with commas, new lines, or semicolons.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
     // MARK: Permissions
 
     private var permissionsSection: some View {
@@ -1546,6 +1469,8 @@ struct PromptsSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
+                PageHeader("Style", subtitle: "Control how your dictation is cleaned up and formatted.")
+
                 SettingsCard("System Prompt", icon: "text.bubble.fill") {
                     systemPromptSection
                 }
@@ -2069,9 +1994,9 @@ struct RunLogView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 6) {
                     Text("Run Log")
-                        .font(.headline)
+                        .font(WisprFonts.serif(34, weight: .medium))
                     Text("Stored locally. Only the \(appState.maxPipelineHistoryCount) most recent runs are kept.")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
@@ -2735,7 +2660,15 @@ struct VoiceMacrosSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
-                SettingsCard("Voice Macros", icon: "music.mic") {
+                PageHeader(
+                    "Snippets",
+                    subtitle: "Say a short phrase and paste a predefined text instantly, skipping cleanup."
+                ) {
+                    Button("Add snippet") { showingAddMacro = true }
+                        .buttonStyle(WisprPrimaryButtonStyle())
+                }
+
+                SettingsCard("Snippets", icon: "music.mic") {
                     macrosSection
                 }
             }
@@ -2748,26 +2681,16 @@ struct VoiceMacrosSettingsView: View {
 
     private var macrosSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Bypass post-processing and immediately paste your predefined text.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button(action: { showingAddMacro = true }) {
-                    Text("Add Macro")
-                }
-            }
-
             if appState.voiceMacros.isEmpty {
                 VStack {
                     Image(systemName: "music.mic")
                         .font(.system(size: 30))
                         .foregroundStyle(.tertiary)
                         .padding(.bottom, 4)
-                    Text("No Voice Macros Yet")
+                    Text("No snippets yet")
                         .font(.headline)
                         .foregroundStyle(.secondary)
-                    Text("Click 'Add Macro' to define your first voice macro.")
+                    Text("Click 'Add snippet' to create your first one.")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .multilineTextAlignment(.center)

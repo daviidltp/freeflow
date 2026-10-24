@@ -21,10 +21,12 @@ struct PrecomputedMacro {
 }
 
 enum SettingsTab: String, CaseIterable, Identifiable {
-    case general
-    case prompts
-    case macros
+    case home
+    case dictionary
+    case snippets
+    case style
     case runLog
+    case settings
     case debug
 
     var id: String { rawValue }
@@ -37,20 +39,24 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .general: return "General"
-        case .prompts: return "Prompts"
-        case .macros: return "Voice Macros"
+        case .home: return "Home"
+        case .dictionary: return "Dictionary"
+        case .snippets: return "Snippets"
+        case .style: return "Style"
         case .runLog: return "Run Log"
+        case .settings: return "Settings"
         case .debug: return "Debug"
         }
     }
 
     var icon: String {
         switch self {
-        case .general: return "gearshape"
-        case .prompts: return "text.bubble"
-        case .macros: return "music.mic"
+        case .home: return "house"
+        case .dictionary: return "character.book.closed"
+        case .snippets: return "scissors"
+        case .style: return "textformat"
         case .runLog: return "clock.arrow.circlepath"
+        case .settings: return "gearshape"
         case .debug: return "wrench.and.screwdriver"
         }
     }
@@ -584,7 +590,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     @Published var hasAccessibility = false
     @Published var hotkeyMonitoringErrorMessage: String?
     @Published var isDebugOverlayActive = false
-    @Published var selectedSettingsTab: SettingsTab? = .general
+    @Published var selectedSettingsTab: SettingsTab? = .home
     @Published var pipelineHistory: [PipelineHistoryItem] = []
     @Published var debugStatusMessage = "Idle"
     @Published var debugShowsUpdateReminderAfterDictation = false
@@ -619,6 +625,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private var audioLevelCancellable: AnyCancellable?
     private var debugOverlayTimer: Timer?
     private var recordingInitializationTimer: DispatchSourceTimer?
+    let dictationStats = DictationStatsStore()
+    private var recordingCaptureStartedAt: ContinuousClock.Instant?
+    private var lastRecordingSeconds: Double?
     private var transcriptionTask: Task<Void, Never>?
     private var transcribingAudioFileName: String?
     private var contextService: AppContextService
@@ -812,6 +821,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         self.soundVolume = soundVolume
         self.voiceMacros = initialMacros
         self.pipelineHistory = savedHistory
+        dictationStats.seedIfEmpty(from: savedHistory)
         self.hasAccessibility = initialAccessibility
         self.hasScreenRecordingPermission = initialScreenCapturePermission
         self.launchAtLogin = SMAppService.mainApp.status == .enabled
@@ -2339,6 +2349,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
             // The recorder already delivers on main after validating the generation.
             // Do not enqueue again: cancellation could invalidate it between main-queue blocks.
             guard let self, self.isRecording, self.activeRecordingTriggerMode != nil else { return }
+            self.recordingCaptureStartedAt = captureStartedAt
             self.cancelRecordingInitializationTimer()
             os_log(.info, log: recordingLog, "first real audio — transitioning to waveform")
             self.statusText = "Recording..."
@@ -2741,6 +2752,11 @@ final class AppState: ObservableObject, @unchecked Sendable {
         isTranscribing = true
         statusText = "Preparing audio..."
         errorMessage = nil
+        if let started = recordingCaptureStartedAt {
+            let elapsed = started.duration(to: .now).components
+            lastRecordingSeconds = Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
+        }
+        recordingCaptureStartedAt = nil
         playAlertSound(named: "Pop")
         overlayManager.showTranscribing()
         audioRecorder.stopRecording { [weak self] fileURL in
@@ -3031,6 +3047,12 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 Self.deleteAudioFile(audioFileName)
             }
             pipelineHistory = pipelineHistoryStore.loadAllHistory()
+            let finalText = postProcessedTranscript.isEmpty ? rawTranscript : postProcessedTranscript
+            dictationStats.record(
+                words: DictationStatsStore.wordCount(in: finalText),
+                seconds: lastRecordingSeconds
+            )
+            lastRecordingSeconds = nil
         } catch {
             errorMessage = "Unable to save run history entry: \(error.localizedDescription)"
         }
@@ -3318,7 +3340,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private func handleUpdateOverlayPressed() {
         clearPendingOverlayDismissToken()
         overlayManager.dismiss()
-        selectedSettingsTab = .general
+        selectedSettingsTab = .settings
         NotificationCenter.default.post(name: .showSettings, object: nil)
 
         DispatchQueue.main.async {

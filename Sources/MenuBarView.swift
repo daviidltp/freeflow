@@ -227,7 +227,7 @@ struct MenuBarView: View {
 
                 Divider()
                 Button("Customize…") {
-                    appState.selectedSettingsTab = .general
+                    appState.selectedSettingsTab = .settings
                     NotificationCenter.default.post(name: .showSettings, object: nil)
                 }
             }
@@ -271,7 +271,7 @@ struct MenuBarView: View {
 
                 Divider()
                 Button("Customize…") {
-                    appState.selectedSettingsTab = .general
+                    appState.selectedSettingsTab = .settings
                     NotificationCenter.default.post(name: .showSettings, object: nil)
                 }
             }
@@ -315,7 +315,7 @@ struct MenuBarView: View {
 
                 Divider()
                 Button("Customize…") {
-                    appState.selectedSettingsTab = .general
+                    appState.selectedSettingsTab = .settings
                     NotificationCenter.default.post(name: .showSettings, object: nil)
                 }
             }
