@@ -13,6 +13,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         NetworkMonitor.shared.start()
         WisprFonts.registerIfNeeded()
+        if appState.hasCompletedSetup {
+            appState.overlayManager.refreshIdleIsland()
+        }
 
         NotificationCenter.default.addObserver(
             self,
@@ -182,6 +185,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func completeSetup() {
         appState.hasCompletedSetup = true
+        appState.overlayManager.refreshIdleIsland()
         setupWindow?.close()
         setupWindow = nil
         NSApp.setActivationPolicy(.accessory)

@@ -860,6 +860,14 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 self?.cancelToggleShortcutSession()
             }
         }
+        overlayManager.onIdleDictatePressed = { [weak self] in
+            DispatchQueue.main.async {
+                self?.toggleRecording()
+            }
+        }
+        overlayManager.idleShortcutLabel = { [weak self] in
+            self?.holdShortcut.displayName ?? "fn"
+        }
         overlayManager.onUpdateOverlayPressed = { [weak self] in
             DispatchQueue.main.async {
                 self?.handleUpdateOverlayPressed()

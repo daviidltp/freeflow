@@ -81,6 +81,11 @@ final class RecordingOverlayManager {
     var onStopButtonPressed: (() -> Void)?
     var onCancelButtonPressed: (() -> Void)?
     var onUpdateOverlayPressed: (() -> Void)?
+    var onIdleDictatePressed: (() -> Void)?
+    var idleShortcutLabel: () -> String = { "fn" }
+
+    private var idlePanel: NSPanel?
+    private var idleHovering = false
 
     /// The screen the overlay should appear on. The user picks one of
     /// three modes in Settings, stored in UserDefaults under
@@ -254,6 +259,7 @@ final class RecordingOverlayManager {
     }
 
     private func showOverlayPanel(animatedResize: Bool) {
+        hideIdleIsland()
         let frame = overlayFrame
 
         if let panel = overlayWindow {
@@ -361,6 +367,76 @@ final class RecordingOverlayManager {
         }
     }
 
+    // MARK: Idle island
+
+    private var idleFrame: NSRect {
+        guard let screen = targetScreen else { return .zero }
+        let width: CGFloat = idleHovering ? 150 : 64
+        let height: CGFloat = idleHovering ? 90 : 20
+        return NSRect(
+            x: screen.frame.midX - width / 2,
+            y: screen.visibleFrame.minY + WisprIsland.bottomMargin - (idleHovering ? 4 : 7),
+            width: width,
+            height: height
+        )
+    }
+
+    /// Muestra u oculta la mini-isla según el ajuste y si hay un dictado en curso.
+    func refreshIdleIsland() {
+        DispatchQueue.main.async {
+            guard IdleIslandPreference.isEnabled, self.overlayWindow == nil else {
+                self.hideIdleIsland()
+                return
+            }
+            self.showIdleIsland()
+        }
+    }
+
+    private func showIdleIsland() {
+        idleHovering = false
+        let frame = idleFrame
+        guard !frame.isEmpty else { return }
+        let panel = idlePanel ?? makeOverlayPanel(width: frame.width, height: frame.height)
+        panel.ignoresMouseEvents = false
+        panel.level = .statusBar
+        panel.contentView = makeIdleContent(frame: frame)
+        panel.setFrame(frame, display: true)
+        panel.alphaValue = 1
+        panel.orderFrontRegardless()
+        idlePanel = panel
+    }
+
+    private func hideIdleIsland() {
+        guard let panel = idlePanel else { return }
+        idlePanel = nil
+        idleHovering = false
+        panel.orderOut(nil)
+        panel.contentView = nil
+        panel.close()
+    }
+
+    private func makeIdleContent(frame: NSRect) -> NSView {
+        let root = IdleIslandView(
+            shortcutLabel: idleShortcutLabel(),
+            isHovering: idleHovering,
+            onHoverChange: { [weak self] hovering in self?.setIdleHovering(hovering) },
+            onPress: { [weak self] in self?.onIdleDictatePressed?() }
+        )
+        .frame(width: frame.width, height: frame.height)
+        let hosting = NSHostingView(rootView: root)
+        hosting.frame = NSRect(x: 0, y: 0, width: frame.width, height: frame.height)
+        hosting.autoresizingMask = [.width, .height]
+        return hosting
+    }
+
+    private func setIdleHovering(_ hovering: Bool) {
+        guard let panel = idlePanel, idleHovering != hovering else { return }
+        idleHovering = hovering
+        let frame = idleFrame
+        panel.contentView = makeIdleContent(frame: frame)
+        panel.setFrame(frame, display: true)
+    }
+
     private func dismissAll() {
         lockedOverlayWidth = nil
         overlayState.recordingStartedAt = nil
@@ -371,7 +447,8 @@ final class RecordingOverlayManager {
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.14
             panel.animator().alphaValue = 0
-        }, completionHandler: {
+        }, completionHandler: { [weak self] in
+            self?.refreshIdleIsland()
             // orderOut alone leaves the panel retained in NSApp.windows with its
             // SwiftUI hierarchy mounted — repeatForever animations keep flushing
             // Core Animation forever. Unmount and close so the panel deallocates.

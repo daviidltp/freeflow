@@ -618,6 +618,7 @@ struct GeneralSettingsView: View {
     @Environment(\.openURL) private var openURL
     @AppStorage("show_menu_bar_icon") private var showMenuBarIcon = true
     @AppStorage("overlay_display_id") private var overlayDisplayID = 0
+    @AppStorage(IdleIslandPreference.storageKey) private var showIdleIsland = true
     @AppStorage(RecordingTimerPreference.storageKey) private var showRecordingTimer = RecordingTimerPreference.defaultEnabled
     @State private var screensVersion = 0
     @State private var apiDraft = APIConfigurationDraft()
@@ -1099,6 +1100,12 @@ struct GeneralSettingsView: View {
 
     private var overlaySection: some View {
         VStack(alignment: .leading, spacing: 12) {
+            Toggle("Show idle island", isOn: $showIdleIsland)
+                .onChange(of: showIdleIsland) { _ in appState.overlayManager.refreshIdleIsland() }
+            Text("A thin bar at the bottom of the screen that turns into a dictate button when you hover it.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             Toggle("Show recording timer", isOn: $showRecordingTimer)
             Text("Adds a timer to the left of the waveform in the floating island. Applies to the next recording.")
                 .font(.caption)
