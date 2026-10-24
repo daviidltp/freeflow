@@ -25,6 +25,13 @@ enum DictationStatsTests {
         TestSupport.expectEqual(store.currentStreak(now: now), 3)
         TestSupport.expectEqual(store.wordsPerMinute, 90)
 
+        let week = store.wordsByDay(days: 7, now: now)
+        TestSupport.expectEqual(week.count, 7)
+        TestSupport.expectEqual(week.last?.words, 60)
+        TestSupport.expectEqual(week[4].words, 10)
+        TestSupport.expectEqual(week[0].words, 0)
+        TestSupport.expectEqual(store.dictationCount, 3)
+
         // Si hoy aún no se ha dictado, la racha de ayer sigue viva; si falta un día entero, se rompe.
         TestSupport.expectEqual(store.currentStreak(now: now.addingTimeInterval(day)), 3)
         TestSupport.expectEqual(store.currentStreak(now: now.addingTimeInterval(2 * day)), 0)

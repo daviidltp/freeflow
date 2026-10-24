@@ -423,6 +423,8 @@ struct SettingsView: View {
                     VoiceMacrosSettingsView()
                 case .style:
                     PromptsSettingsView()
+                case .insights:
+                    InsightsView()
                 case .runLog:
                     RunLogView()
                 case .settings:
@@ -452,7 +454,7 @@ struct SettingsView: View {
 private struct MainSidebar: View {
     @EnvironmentObject var appState: AppState
 
-    private let mainTabs: [SettingsTab] = [.home, .dictionary, .snippets, .style, .runLog]
+    private let mainTabs: [SettingsTab] = [.home, .dictionary, .snippets, .style, .insights, .runLog]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {

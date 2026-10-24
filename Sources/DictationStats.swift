@@ -74,6 +74,21 @@ final class DictationStatsStore: ObservableObject {
         return Int((Double(words) / (seconds / 60)).rounded())
     }
 
+    var dictationCount: Int { entries.count }
+
+    /// Palabras de cada uno de los últimos `days` días (el último elemento es hoy).
+    func wordsByDay(days: Int, now: Date = Date()) -> [(day: Date, words: Int)] {
+        let today = calendar.startOfDay(for: now)
+        var totals: [Date: Int] = [:]
+        for entry in entries {
+            totals[calendar.startOfDay(for: entry.date), default: 0] += entry.words
+        }
+        return (0..<days).reversed().compactMap { offset in
+            guard let day = calendar.date(byAdding: .day, value: -offset, to: today) else { return nil }
+            return (day, totals[day] ?? 0)
+        }
+    }
+
     /// Días seguidos con al menos un dictado. Si hoy aún no has dictado, la racha de ayer sigue viva.
     func currentStreak(now: Date = Date()) -> Int {
         let days = Set(entries.map { calendar.startOfDay(for: $0.date) })

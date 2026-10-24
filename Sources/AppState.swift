@@ -25,6 +25,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     case dictionary
     case snippets
     case style
+    case insights
     case runLog
     case settings
     case debug
@@ -43,6 +44,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .dictionary: return "Dictionary"
         case .snippets: return "Snippets"
         case .style: return "Style"
+        case .insights: return "Insights"
         case .runLog: return "Run Log"
         case .settings: return "Settings"
         case .debug: return "Debug"
@@ -55,6 +57,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .dictionary: return "character.book.closed"
         case .snippets: return "scissors"
         case .style: return "textformat"
+        case .insights: return "chart.bar"
         case .runLog: return "clock.arrow.circlepath"
         case .settings: return "gearshape"
         case .debug: return "wrench.and.screwdriver"
