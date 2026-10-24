@@ -33,8 +33,7 @@ private struct InsightsContent: View {
             .padding(.horizontal, 32)
             .padding(.top, 36)
             .padding(.bottom, 32)
-            .frame(maxWidth: 900, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -110,7 +109,7 @@ private struct InsightsContent: View {
         let progress = min(Double(wpm ?? 0) / 200, 1)
         return VStack(alignment: .leading, spacing: 12) {
             Text(wpm.map(String.init) ?? "–")
-                .font(WisprFonts.figtree(40, weight: .medium))
+                .font(WisprFonts.figtree(28, weight: .medium))
                 .foregroundStyle(WisprPalette.foreground)
             Text("WORDS PER MINUTE")
                 .font(WisprFonts.figtree(12, weight: .medium))
@@ -118,17 +117,16 @@ private struct InsightsContent: View {
                 .foregroundStyle(WisprPalette.mutedForeground)
             SpeedGauge(progress: progress, wpm: wpm)
                 .frame(maxWidth: .infinity)
-                .frame(height: 96)
+                .frame(height: 104)
         }
         .padding(22)
-        .frame(maxWidth: .infinity, alignment: .leading)
         .insightsCardBackground()
     }
 
     private func statCard<Detail: View>(value: String, label: String, @ViewBuilder detail: () -> Detail) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(value)
-                .font(WisprFonts.figtree(40, weight: .medium))
+                .font(WisprFonts.figtree(28, weight: .medium))
                 .foregroundStyle(WisprPalette.foreground)
             Text(label)
                 .font(WisprFonts.figtree(12, weight: .medium))
@@ -142,7 +140,6 @@ private struct InsightsContent: View {
             Spacer(minLength: 0)
         }
         .padding(22)
-        .frame(maxWidth: .infinity, alignment: .leading)
         .insightsCardBackground()
     }
 
@@ -171,7 +168,7 @@ private struct InsightsContent: View {
     private func simpleCard(value: String, label: String) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(value)
-                .font(WisprFonts.figtree(40, weight: .medium))
+                .font(WisprFonts.figtree(28, weight: .medium))
                 .foregroundStyle(WisprPalette.foreground)
             Text(label)
                 .font(WisprFonts.figtree(12, weight: .medium))
@@ -180,14 +177,14 @@ private struct InsightsContent: View {
                 .lineLimit(1)
         }
         .padding(22)
-        .frame(maxWidth: .infinity, alignment: .leading)
         .insightsCardBackground()
     }
 }
 
 private extension View {
     func insightsCardBackground() -> some View {
-        background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(WisprPalette.backgroundSecondary))
+        frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(WisprPalette.backgroundSecondary))
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(WisprPalette.border, lineWidth: 1))
     }
 }
@@ -207,10 +204,10 @@ private struct SpeedGauge: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             GaugeArc(progress: 1)
-                .stroke(WisprPalette.sand700.opacity(0.7), style: StrokeStyle(lineWidth: 12, lineCap: .round))
+                .stroke(WisprPalette.sand700.opacity(0.55), style: StrokeStyle(lineWidth: 16, lineCap: .round))
             if progress > 0 {
                 GaugeArc(progress: progress)
-                    .stroke(WisprPalette.teal900, style: StrokeStyle(lineWidth: 12, lineCap: .round))
+                    .stroke(WisprPalette.teal900, style: StrokeStyle(lineWidth: 16, lineCap: .round))
             }
             VStack(spacing: 0) {
                 Text("vs. typing")
@@ -222,7 +219,7 @@ private struct SpeedGauge: View {
             }
             .padding(.bottom, 2)
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, 6)
     }
 }
 
@@ -230,8 +227,8 @@ private struct GaugeArc: Shape {
     var progress: Double
 
     func path(in rect: CGRect) -> Path {
-        let radius = min(rect.width / 2, rect.height) - 6
-        let center = CGPoint(x: rect.midX, y: rect.maxY - 6)
+        let radius = min(rect.width / 2, rect.height) - 10
+        let center = CGPoint(x: rect.midX, y: rect.maxY - 10)
         var path = Path()
         path.addArc(
             center: center,
@@ -257,9 +254,8 @@ private struct DesktopUsageCard: View {
             words[category, default: 0] += entry.words
             counts[category, default: 0] += 1
         }
-        return UsageCategory.allCases
-            .map { (category: $0, words: words[$0] ?? 0, dictations: counts[$0] ?? 0) }
-            .sorted { $0.words > $1.words }
+        let order: [UsageCategory] = [.other, .aiPrompts, .emails, .workMessages, .personalMessages, .documents]
+        return order.map { (category: $0, words: words[$0] ?? 0, dictations: counts[$0] ?? 0) }
     }
 
     private var totalApps: Int {
@@ -269,7 +265,7 @@ private struct DesktopUsageCard: View {
     var body: some View {
         let rows = wordsByCategory
         let total = max(rows.reduce(0) { $0 + $1.words }, 1)
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 26) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Desktop usage")
                     .font(WisprFonts.figtree(28, weight: .medium))
@@ -280,9 +276,9 @@ private struct DesktopUsageCard: View {
                     .tracking(1)
                     .foregroundStyle(WisprPalette.mutedForeground)
             }
-            VStack(spacing: 14) {
+            VStack(spacing: 18) {
                 ForEach(rows, id: \.category) { row in
-                    usageRow(row.category, words: row.words, dictations: row.dictations, total: total, isTop: row.category == rows.first?.category && row.words > 0)
+                    usageRow(row.category, words: row.words, dictations: row.dictations, total: total, isTop: row.words > 0 && row.words == rows.map(\.words).max())
                 }
             }
         }
@@ -292,26 +288,31 @@ private struct DesktopUsageCard: View {
 
     private func usageRow(_ category: UsageCategory, words: Int, dictations: Int, total: Int, isTop: Bool) -> some View {
         let share = Double(words) / Double(total)
-        return HStack(spacing: 12) {
+        return HStack(spacing: 14) {
             Image(systemName: category.icon)
-                .font(.system(size: 15))
-                .frame(width: 22)
+                .font(.system(size: 16))
+                .frame(width: 24)
                 .foregroundStyle(WisprPalette.foreground)
             GeometryReader { geometry in
-                let width = max(52, geometry.size.width * share)
-                Text("\(Int((share * 100).rounded()))%")
-                    .font(WisprFonts.figtree(13, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: width, height: 34)
-                    .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(isTop ? WisprPalette.teal900 : WisprPalette.teal500))
+                // La barra más larga ocupa hasta ~62 % del ancho; el resto se queda en chip pequeño.
+                let longest = geometry.size.width * 0.62
+                let width = max(54, longest * share)
+                HStack(spacing: 14) {
+                    Text("\(Int((share * 100).rounded()))%")
+                        .font(WisprFonts.figtree(13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: width, height: 28)
+                        .background(RoundedRectangle(cornerRadius: 3, style: .continuous).fill(isTop ? WisprPalette.teal900 : WisprPalette.teal500))
+                    Text("\(dictations) \(category.rawValue.uppercased())")
+                        .font(WisprFonts.figtree(12, weight: .medium))
+                        .tracking(1.2)
+                        .foregroundStyle(WisprPalette.foreground)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+                .frame(maxHeight: .infinity, alignment: .center)
             }
-            .frame(height: 34)
-            Text("\(dictations) \(category.rawValue.uppercased())")
-                .font(WisprFonts.figtree(11, weight: .medium))
-                .tracking(1)
-                .foregroundStyle(WisprPalette.foreground)
-                .frame(width: 150, alignment: .leading)
-                .lineLimit(1)
+            .frame(height: 28)
         }
     }
 }
@@ -387,51 +388,55 @@ private struct StreakCard: View {
             }
 
             HStack(alignment: .top, spacing: 8) {
-                VStack(alignment: .trailing, spacing: 4) {
-                    Color.clear.frame(height: 16)
+                VStack(alignment: .leading, spacing: 5) {
+                    Color.clear.frame(width: 34, height: 20)
                     ForEach(Self.weekdays, id: \.self) { day in
                         Text(day)
-                            .font(WisprFonts.figtree(10))
+                            .font(WisprFonts.figtree(12))
                             .foregroundStyle(WisprPalette.mutedForeground)
-                            .frame(height: 14)
+                            .fixedSize()
+                            .frame(width: 34, height: 16, alignment: .leading)
                     }
                 }
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 5) {
                         ForEach(Array(columns.enumerated()), id: \.offset) { index, column in
                             Text(monthLabel(column: column, index: index, columns: columns))
-                                .font(WisprFonts.figtree(10))
+                                .font(WisprFonts.figtree(12))
                                 .foregroundStyle(WisprPalette.mutedForeground)
                                 .fixedSize()
-                                .frame(width: 14, height: 16, alignment: .leading)
+                                .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
                         }
                     }
-                    HStack(spacing: 4) {
+                    HStack(spacing: 5) {
                         ForEach(Array(columns.enumerated()), id: \.offset) { _, column in
-                            VStack(spacing: 4) {
+                            VStack(spacing: 5) {
                                 ForEach(column) { cell in
                                     RoundedRectangle(cornerRadius: 3, style: .continuous)
                                         .fill(color(for: cell.words, maxWords: maxWords))
-                                        .frame(width: 14, height: 14)
+                                        .frame(maxWidth: .infinity)
+                                        .frame(height: 16)
                                         .help(cell.words.map { "\($0) words" } ?? "")
                                 }
                             }
                         }
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            HStack(spacing: 6) {
-                Text("Less")
-                    .font(WisprFonts.figtree(12))
-                    .foregroundStyle(WisprPalette.mutedForeground)
-                ForEach([WisprPalette.teal200, WisprPalette.teal500, WisprPalette.teal700, WisprPalette.teal900], id: \.self) { shade in
-                    RoundedRectangle(cornerRadius: 3, style: .continuous).fill(shade).frame(width: 14, height: 14)
-                }
+            HStack(spacing: 8) {
                 Text("More")
-                    .font(WisprFonts.figtree(12))
+                    .font(WisprFonts.figtree(13))
+                    .foregroundStyle(WisprPalette.mutedForeground)
+                ForEach([WisprPalette.teal900, WisprPalette.teal700, WisprPalette.teal500, WisprPalette.teal200], id: \.self) { shade in
+                    RoundedRectangle(cornerRadius: 3, style: .continuous).fill(shade).frame(width: 18, height: 18)
+                }
+                Text("Less")
+                    .font(WisprFonts.figtree(13))
                     .foregroundStyle(WisprPalette.mutedForeground)
             }
+            Spacer(minLength: 0)
         }
         .padding(22)
         .insightsCardBackground()

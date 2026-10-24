@@ -542,7 +542,7 @@ struct PageHeader<Trailing: View>: View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(title)
-                    .font(WisprFonts.figtree(30, weight: .medium))
+                    .font(WisprFonts.figtree(24, weight: .medium))
                     .foregroundStyle(WisprPalette.foreground)
                 if let subtitle {
                     Text(subtitle)
