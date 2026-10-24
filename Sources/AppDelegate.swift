@@ -37,6 +37,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     }
 
+    // La app vive en la barra de menús: cerrar Settings o el asistente no debe terminarla.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         guard appState.hasCompletedSetup else { return true }
         if !flag {
@@ -127,10 +132,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             object: window,
             queue: .main
         ) { [weak self] _ in
-            if self?.setupWindow == nil {
-                NSApp.setActivationPolicy(.accessory)
-            }
             self?.settingsWindow = nil
+            // Fuera del willClose: cambiar la política aquí mismo puede cerrar la app entera.
+            DispatchQueue.main.async {
+                if self?.setupWindow == nil {
+                    NSApp.setActivationPolicy(.accessory)
+                }
+            }
         }
     }
 
