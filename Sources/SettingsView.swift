@@ -422,7 +422,7 @@ struct SettingsView: View {
                 case .snippets:
                     VoiceMacrosSettingsView()
                 case .style:
-                    PromptsSettingsView()
+                    StyleView()
                 case .insights:
                     InsightsView()
                 case .settings:
@@ -1468,6 +1468,7 @@ struct MicrophoneOptionRow: View {
 
 struct PromptsSettingsView: View {
     @EnvironmentObject var appState: AppState
+    var showsHeader = true
     @State private var customSystemPromptInput: String = ""
     @State private var customContextPromptInput: String = ""
     @FocusState private var customSystemPromptFocused: Bool
@@ -1491,13 +1492,21 @@ struct PromptsSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
-                PageHeader("Style", subtitle: "Control how your dictation is cleaned up and formatted.")
+                if showsHeader {
+                    PageHeader("Style", subtitle: "Control how your dictation is cleaned up and formatted.")
+                }
 
+                SettingsCard("Style Prompts", icon: "textformat") {
+                    StylePromptsEditor()
+                }
                 SettingsCard("System Prompt", icon: "text.bubble.fill") {
                     systemPromptSection
                 }
                 SettingsCard("Instruction Guard", icon: "shield.lefthalf.filled") {
                     instructionGuardSection
+                }
+                SettingsCard("Screen Analysis", icon: "eye.fill") {
+                    ScreenAnalysisToggle()
                 }
                 SettingsCard("Context Prompt", icon: "eye.fill") {
                     contextPromptSection
@@ -2768,6 +2777,79 @@ struct VoiceMacroEditorView: View {
                 command = m.command
                 payload = m.payload
             }
+        }
+    }
+}
+
+
+// MARK: - Style prompts and screen analysis
+
+/// Un campo por estilo para cambiar la instrucción que se añade al prompt, con botón para restaurarla.
+private struct StylePromptsEditor: View {
+    @StateObject private var store = WritingStyleStore.shared
+    @State private var drafts: [WritingStyle: String] = [:]
+
+    private let editable: [WritingStyle] = [.casual, .veryCasual, .excited]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Instructions added to the cleanup prompt when a style other than Formal is selected. Formal adds nothing.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ForEach(editable) { style in
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text(style.title.trimmingCharacters(in: CharacterSet(charactersIn: ".!")).capitalized)
+                            .font(.caption.weight(.semibold))
+                        if !store.customInstruction(for: style).isEmpty {
+                            Text("Customized").font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Restore default") {
+                            store.setCustomInstruction("", for: style)
+                            drafts[style] = style.promptInstruction ?? ""
+                        }
+                        .font(.caption)
+                        .disabled(store.customInstruction(for: style).isEmpty)
+                    }
+                    TextEditor(text: binding(for: style))
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(minHeight: 110, maxHeight: 190)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                        )
+                }
+            }
+        }
+        .onAppear {
+            for style in editable {
+                let custom = store.customInstruction(for: style)
+                drafts[style] = custom.isEmpty ? (style.promptInstruction ?? "") : custom
+            }
+        }
+    }
+
+    private func binding(for style: WritingStyle) -> Binding<String> {
+        Binding(
+            get: { drafts[style] ?? "" },
+            set: {
+                drafts[style] = $0
+                store.setCustomInstruction($0, for: style)
+            }
+        )
+    }
+}
+
+private struct ScreenAnalysisToggle: View {
+    @AppStorage(ScreenAnalysisPreference.storageKey) private var enabled = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("Analyze the screen with AI on every dictation", isOn: $enabled)
+            Text("Off by default: FreeFlow uses the app name and window title, which is instant and uses no tokens. On, it also sends a screenshot to the vision model to read names and context on screen. It costs time and Groq quota on every dictation.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 }
