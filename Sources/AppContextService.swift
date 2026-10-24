@@ -46,6 +46,16 @@ enum DesktopScreenshotFallbackPreference {
     }
 }
 
+/// Si está activado, cada dictado analiza una captura de la ventana con un modelo de visión.
+/// Apagado, la app solo usa el nombre de la app y el título de la ventana, que no cuestan nada.
+enum ScreenAnalysisPreference {
+    static let storageKey = "context_screen_analysis_enabled"
+
+    static func load(from defaults: UserDefaults) -> Bool {
+        defaults.bool(forKey: storageKey)
+    }
+}
+
 final class AppContextService {
     static let defaultContextModel = "qwen/qwen3.8-27b"
     static let defaultContextPrompt = """
@@ -146,6 +156,26 @@ Return only two sentences, no labels, no markdown, no extra commentary.
 
         let windowTitle = focusedWindowTitle(from: appElement) ?? appName
         let selectedText = selectedText(from: appElement)
+
+        guard ScreenAnalysisPreference.load(from: .standard) else {
+            let place = [appName, windowTitle]
+                .compactMap { $0 }
+                .reduce(into: [String]()) { if !$1.isEmpty && !$0.contains($1) { $0.append($1) } }
+                .joined(separator: " - ")
+            return AppContext(
+                appName: appName,
+                bundleIdentifier: bundleIdentifier,
+                windowTitle: windowTitle,
+                selectedText: selectedText,
+                currentActivity: place.isEmpty ? "The user is dictating." : "The user is dictating in \(place).",
+                contextSystemPrompt: contextSystemPrompt,
+                contextPrompt: nil,
+                screenshotDataURL: nil,
+                screenshotMimeType: nil,
+                screenshotError: nil
+            )
+        }
+
         let screenshot = captureActiveWindowScreenshot(
             processIdentifier: frontmostApp.processIdentifier,
             appElement: appElement,

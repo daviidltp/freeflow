@@ -2692,7 +2692,12 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 customVocabulary: customVocabulary,
                 customSystemPrompt: customSystemPrompt,
                 outputLanguage: outputLanguage,
-                dictationLanguage: dictationLanguage
+                dictationLanguage: dictationLanguage,
+                styleInstruction: WritingStyleStore.shared.instruction(
+                    appName: context.appName,
+                    bundleIdentifier: context.bundleIdentifier,
+                    windowTitle: context.windowTitle
+                )
             )
             return (VocabularyReplacements.applyStored(result.transcript), .postProcessingSucceeded, result.prompt)
         } catch {
@@ -2767,6 +2772,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         recordingCaptureStartedAt = nil
         playAlertSound(named: "Pop")
         overlayManager.showTranscribing()
+        let timingStart = ContinuousClock.now
         audioRecorder.stopRecording { [weak self] fileURL in
             guard let self else { return }
             guard let fileURL else {
@@ -2828,6 +2834,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                         fileURL: transcriptionFileURL
                     )
                     let rawTranscript = try await transcript
+                    let timingTranscribed = ContinuousClock.now
                     let parsedTranscript = Self.parseTranscriptCommands(
                         from: rawTranscript,
                         pressEnterCommandEnabled: self.isPressEnterVoiceCommandEnabled
@@ -2843,6 +2850,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                             self?.lastTranscript = bootstrapTranscript
                         }
                     }
+                    let timingContextStart = ContinuousClock.now
                     let appContext: AppContext
                     if let sessionContext {
                         appContext = sessionContext
@@ -2851,6 +2859,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     } else {
                         appContext = self.fallbackContextAtStop()
                     }
+                    let timingContextEnd = ContinuousClock.now
                     try Task.checkCancellation()
                     await MainActor.run { [weak self] in
                         self?.debugStatusMessage = "Running post-processing"
@@ -2868,6 +2877,15 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     )
                     try Task.checkCancellation()
 
+                    let timingDone = ContinuousClock.now
+                    DictationTimingLog.append(
+                        screenAnalysis: ScreenAnalysisPreference.load(from: .standard),
+                        app: appContext.appName,
+                        transcription: timingStart.duration(to: timingTranscribed),
+                        contextWait: timingContextStart.duration(to: timingContextEnd),
+                        postProcessing: timingContextEnd.duration(to: timingDone),
+                        total: timingStart.duration(to: timingDone)
+                    )
                     await MainActor.run {
                         guard self.isTranscribing else { return }
                         self.lastContextSummary = appContext.contextSummary
