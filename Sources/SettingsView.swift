@@ -411,7 +411,7 @@ struct SettingsView: View {
     var body: some View {
         HStack(spacing: 0) {
             MainSidebar()
-                .frame(width: 216)
+                .frame(width: 196)
 
             Group {
                 switch appState.selectedSettingsTab {
@@ -425,8 +425,6 @@ struct SettingsView: View {
                     PromptsSettingsView()
                 case .insights:
                     InsightsView()
-                case .runLog:
-                    RunLogView()
                 case .settings:
                     GeneralSettingsView()
                 case .debug:
@@ -445,16 +443,31 @@ struct SettingsView: View {
             .padding(.bottom, 8)
         }
         .background(WisprPalette.backgroundSecondary)
+        .overlay(alignment: .top) {
+            // Solo la franja superior arrastra la ventana, como en el resto de apps.
+            WindowDragArea()
+                .frame(height: 36)
+        }
         .font(WisprFonts.figtree(13))
         .tint(WisprPalette.foreground)
     }
+}
+
+/// Vista transparente que mueve la ventana al arrastrar sobre ella.
+private struct WindowDragArea: NSViewRepresentable {
+    private final class DragView: NSView {
+        override var mouseDownCanMoveWindow: Bool { true }
+    }
+
+    func makeNSView(context: Context) -> NSView { DragView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 /// Barra lateral: logo de la app, secciones principales y Settings abajo.
 private struct MainSidebar: View {
     @EnvironmentObject var appState: AppState
 
-    private let mainTabs: [SettingsTab] = [.home, .dictionary, .snippets, .style, .insights, .runLog]
+    private let mainTabs: [SettingsTab] = [.home, .insights, .dictionary, .snippets, .style]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -529,7 +542,7 @@ struct PageHeader<Trailing: View>: View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(title)
-                    .font(WisprFonts.serif(34, weight: .medium))
+                    .font(WisprFonts.figtree(30, weight: .medium))
                     .foregroundStyle(WisprPalette.foreground)
                 if let subtitle {
                     Text(subtitle)
@@ -1986,55 +1999,6 @@ struct PromptsSettingsView: View {
         }
     }
 
-}
-
-// MARK: - Run Log
-
-struct RunLogView: View {
-    @EnvironmentObject var appState: AppState
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Run Log")
-                        .font(WisprFonts.serif(34, weight: .medium))
-                    Text("Stored locally. Only the \(appState.maxPipelineHistoryCount) most recent runs are kept.")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-                Spacer()
-                Button("Clear History") {
-                    appState.clearPipelineHistory()
-                }
-                .disabled(appState.pipelineHistory.isEmpty)
-            }
-            .padding(.horizontal, 24)
-            .padding(.top, 20)
-            .padding(.bottom, 12)
-
-            Divider()
-
-            if appState.pipelineHistory.isEmpty {
-                VStack {
-                    Spacer()
-                    Text("No runs yet. Use dictation to populate history.")
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity)
-            } else {
-                ScrollView {
-                    VStack(spacing: 12) {
-                        ForEach(appState.pipelineHistory) { item in
-                            RunLogEntryView(item: item)
-                        }
-                    }
-                    .padding(20)
-                }
-            }
-        }
-    }
 }
 
 // MARK: - Run Log Entry

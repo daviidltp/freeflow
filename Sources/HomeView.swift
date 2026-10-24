@@ -27,13 +27,9 @@ struct HomeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
-                HStack(alignment: .top) {
-                    Text(greeting)
-                        .font(WisprFonts.serif(34, weight: .medium))
-                        .foregroundStyle(WisprPalette.foreground)
-                    Spacer(minLength: 12)
-                    HomeStatsRow(stats: appState.dictationStats)
-                }
+                Text(greeting)
+                    .font(WisprFonts.figtree(30, weight: .medium))
+                    .foregroundStyle(WisprPalette.foreground)
 
                 if groupedHistory.isEmpty {
                     emptyState
@@ -70,43 +66,6 @@ struct HomeView: View {
 private func displayText(for item: PipelineHistoryItem) -> String {
     let text = item.postProcessedTranscript.isEmpty ? item.rawTranscript : item.postProcessedTranscript
     return text.trimmingCharacters(in: .whitespacesAndNewlines)
-}
-
-// MARK: - Stats
-
-private struct HomeStatsRow: View {
-    @ObservedObject var stats: DictationStatsStore
-
-    var body: some View {
-        HStack(spacing: 8) {
-            chip(emoji: "🔥", value: "\(stats.currentStreak())", unit: stats.currentStreak() == 1 ? "day" : "days")
-            chip(emoji: "🚀", value: Self.compact(stats.totalWords), unit: "words")
-            chip(emoji: "👍", value: stats.wordsPerMinute.map(String.init) ?? "–", unit: "WPM")
-        }
-    }
-
-    private func chip(emoji: String, value: String, unit: String) -> some View {
-        HStack(spacing: 6) {
-            Text(emoji)
-                .font(.system(size: 13))
-            Text(value)
-                .font(WisprFonts.figtree(14, weight: .semibold))
-                .foregroundStyle(WisprPalette.foreground)
-            Text(unit)
-                .font(WisprFonts.figtree(13))
-                .foregroundStyle(WisprPalette.mutedForeground)
-        }
-        .padding(.horizontal, 12)
-        .frame(height: 32)
-        .background(Capsule().fill(WisprPalette.backgroundSecondary))
-        .overlay(Capsule().strokeBorder(WisprPalette.border, lineWidth: 1))
-    }
-
-    private static func compact(_ number: Int) -> String {
-        guard number >= 10_000 else { return number.formatted() }
-        let thousands = Double(number) / 1000
-        return String(format: "%.1fk", thousands)
-    }
 }
 
 // MARK: - Day section
@@ -157,6 +116,7 @@ private struct HomeHistoryRow: View {
     let item: PipelineHistoryItem
     @State private var isHovering = false
     @State private var copied = false
+    @State private var showsDetails = false
 
     private static let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -166,6 +126,19 @@ private struct HomeHistoryRow: View {
     }()
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            summaryRow
+            if showsDetails {
+                RunLogEntryView(item: item)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+        .background(isHovering ? WisprPalette.backgroundSecondary.opacity(0.6) : Color.clear)
+        .onHover { isHovering = $0 }
+    }
+
+    private var summaryRow: some View {
         HStack(alignment: .top, spacing: 20) {
             Text(Self.timeFormatter.string(from: item.timestamp))
                 .font(WisprFonts.figtree(13))
@@ -181,15 +154,12 @@ private struct HomeHistoryRow: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 4) {
+                iconButton(showsDetails ? "chevron.up" : "info.circle", help: "Run details") { showsDetails.toggle() }
                 iconButton(copied ? "checkmark" : "doc.on.doc", help: "Copy") { copy() }
                 iconButton("trash", help: "Delete") { appState.deleteHistoryEntry(id: item.id) }
             }
-            .opacity(isHovering ? 1 : 0)
+            .opacity(isHovering || showsDetails ? 1 : 0)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-        .background(isHovering ? WisprPalette.backgroundSecondary.opacity(0.6) : Color.clear)
-        .onHover { isHovering = $0 }
     }
 
     private func iconButton(_ systemName: String, help: String, action: @escaping () -> Void) -> some View {

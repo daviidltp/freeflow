@@ -127,7 +127,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.title = AppName.displayName
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.isMovableByWindowBackground = true
+        window.isMovableByWindowBackground = false
         window.minSize = NSSize(width: 860, height: 560)
         window.contentView = hostingView
         window.isReleasedWhenClosed = false

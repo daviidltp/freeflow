@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Model
 
@@ -53,6 +54,10 @@ struct DictionaryView: View {
     @AppStorage(VocabularyReplacements.storageKey) private var replacementRules = ""
     @State private var filter: Filter = .all
     @State private var showingAddSheet = false
+    @State private var isSearching = false
+    @State private var searchText = ""
+    @State private var sortsAlphabetically = false
+    @AppStorage("dictionary_banner_dismissed") private var bannerDismissed = false
 
     private var entries: [DictionaryEntry] {
         let words = DictionaryStorage.words(from: appState.customVocabulary).map {
@@ -61,25 +66,50 @@ struct DictionaryView: View {
         let replacements = DictionaryStorage.replacements(from: replacementRules).map {
             DictionaryEntry(kind: .replacement, text: $0.wrong, replacement: $0.right)
         }
+        var result: [DictionaryEntry]
         switch filter {
-        case .all: return words + replacements
-        case .words: return words
-        case .replacements: return replacements
+        case .all: result = words + replacements
+        case .words: result = words
+        case .replacements: result = replacements
         }
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !query.isEmpty {
+            result = result.filter {
+                $0.text.localizedCaseInsensitiveContains(query) || ($0.replacement?.localizedCaseInsensitiveContains(query) ?? false)
+            }
+        }
+        if sortsAlphabetically {
+            result.sort { $0.text.localizedCaseInsensitiveCompare($1.text) == .orderedAscending }
+        }
+        return result
+    }
+
+    private var suggestionWords: [String] {
+        Array(DictionaryStorage.words(from: appState.customVocabulary).prefix(5))
     }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                PageHeader(
-                    "Dictionary",
-                    subtitle: "FreeFlow spells these exactly the way you write them."
-                ) {
-                    Button("Add new") { showingAddSheet = true }
-                        .buttonStyle(WisprPrimaryButtonStyle())
+                PageHeader("Dictionary") {
+                    HStack(spacing: 10) {
+                        Button("Import") { importEntries() }
+                            .buttonStyle(WisprPrimaryButtonStyle())
+                        Button("Add new") { showingAddSheet = true }
+                            .buttonStyle(WisprPrimaryButtonStyle())
+                    }
                 }
 
-                filterBar
+                tabBar
+
+                if !bannerDismissed {
+                    banner
+                }
+
+                if isSearching {
+                    TextField("Search", text: $searchText)
+                        .textFieldStyle(.roundedBorder)
+                }
 
                 if entries.isEmpty {
                     emptyState
@@ -92,15 +122,15 @@ struct DictionaryView: View {
                             }
                         }
                     }
-                    .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(WisprPalette.card))
-                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(WisprPalette.border, lineWidth: 1))
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(WisprPalette.card))
+                    .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(WisprPalette.border, lineWidth: 1))
+                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 }
             }
             .padding(.horizontal, 32)
             .padding(.top, 36)
             .padding(.bottom, 32)
-            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: 820, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
         .sheet(isPresented: $showingAddSheet) {
@@ -110,22 +140,99 @@ struct DictionaryView: View {
         }
     }
 
-    private var filterBar: some View {
-        HStack(spacing: 6) {
-            ForEach(Filter.allCases) { option in
-                Button {
-                    filter = option
-                } label: {
-                    Text(option.rawValue)
-                        .font(WisprFonts.figtree(13, weight: filter == option ? .semibold : .medium))
-                        .foregroundStyle(filter == option ? WisprPalette.foreground : WisprPalette.mutedForeground)
-                        .padding(.horizontal, 14)
-                        .frame(height: 30)
-                        .background(Capsule().fill(filter == option ? WisprPalette.backgroundTertiary : Color.clear))
+    private var tabBar: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 26) {
+                ForEach(Filter.allCases) { option in
+                    Button {
+                        filter = option
+                    } label: {
+                        VStack(spacing: 10) {
+                            Text(option.rawValue)
+                                .font(WisprFonts.figtree(15, weight: filter == option ? .semibold : .medium))
+                                .foregroundStyle(filter == option ? WisprPalette.foreground : WisprPalette.mutedForeground)
+                            Rectangle()
+                                .fill(filter == option ? WisprPalette.foreground : Color.clear)
+                                .frame(height: 2)
+                        }
+                        .fixedSize()
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
+                Spacer()
+                toolbarIcon("magnifyingglass", active: isSearching) {
+                    isSearching.toggle()
+                    if !isSearching { searchText = "" }
+                }
+                toolbarIcon("arrow.up.arrow.down", active: sortsAlphabetically) { sortsAlphabetically.toggle() }
             }
+            Rectangle().fill(WisprPalette.border).frame(height: 1)
         }
+    }
+
+    private func toolbarIcon(_ name: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: name)
+                .font(.system(size: 15))
+                .foregroundStyle(active ? WisprPalette.foreground : WisprPalette.mutedForeground)
+                .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.plain)
+        .padding(.bottom, 8)
+    }
+
+    /// Banner cálido con las primeras palabras del diccionario como atajos.
+    private var banner: some View {
+        ZStack(alignment: .topTrailing) {
+            VStack(alignment: .leading, spacing: 14) {
+                (Text("\(AppName.displayName) spells the way ") + Text("you").italic() + Text(" do."))
+                    .font(WisprFonts.serif(40, weight: .regular))
+                    .foregroundStyle(.white)
+                Text("Correct a spelling once or add it here manually, so your **personal terms, company jargon, or uncommon names** are spelled right in every dictation.")
+                    .font(WisprFonts.figtree(15))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 10) {
+                    Button { showingAddSheet = true } label: {
+                        Text("Add new word")
+                            .font(WisprFonts.figtree(15, weight: .medium))
+                            .foregroundStyle(Color.black)
+                            .padding(.horizontal, 18)
+                            .frame(height: 38)
+                            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.92)))
+                    }
+                    .buttonStyle(.plain)
+                    ForEach(suggestionWords, id: \.self) { word in
+                        Text(word)
+                            .font(WisprFonts.figtree(15, weight: .medium))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 16)
+                            .frame(height: 38)
+                            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.22)))
+                    }
+                }
+            }
+            .padding(28)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button { bannerDismissed = true } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 30, height: 30)
+                    .background(Circle().fill(Color.white.opacity(0.25)))
+            }
+            .buttonStyle(.plain)
+            .padding(14)
+        }
+        .background(
+            LinearGradient(
+                colors: [Color(hex: 0x2B1D18), Color(hex: 0x5C3F2A), Color(hex: 0x9A6C3D)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
     private var emptyState: some View {
@@ -141,6 +248,23 @@ struct DictionaryView: View {
         .padding(24)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(WisprPalette.backgroundSecondary))
+    }
+
+    /// Importa un archivo de texto: una entrada por línea, o `mal => bien` para correcciones.
+    private func importEntries() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.plainText, .commaSeparatedText]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url,
+              let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+        for line in text.split(whereSeparator: \.isNewline) {
+            let parts = line.components(separatedBy: "=>")
+            if parts.count == 2 {
+                add(word: parts[0], replacement: parts[1])
+            } else {
+                for word in DictionaryStorage.words(from: String(line)) { add(word: word, replacement: nil) }
+            }
+        }
     }
 
     private func add(word: String, replacement: String?) {
@@ -205,7 +329,7 @@ private struct DictionaryRow: View {
         }
         .font(WisprFonts.figtree(14))
         .padding(.horizontal, 20)
-        .frame(height: 48)
+        .frame(height: 54)
         .background(isHovering ? WisprPalette.backgroundSecondary.opacity(0.6) : Color.clear)
         .onHover { isHovering = $0 }
     }
@@ -228,7 +352,7 @@ private struct AddDictionaryEntrySheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Add to dictionary")
-                .font(WisprFonts.serif(26, weight: .medium))
+                .font(WisprFonts.figtree(26, weight: .medium))
                 .foregroundStyle(WisprPalette.foreground)
 
             Toggle("Correct a misspelling", isOn: $isCorrection)

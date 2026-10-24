@@ -42,7 +42,7 @@ struct MenuBarView: View {
     }
 
     private func openRunLog() {
-        appState.selectedSettingsTab = .runLog
+        appState.selectedSettingsTab = .home
         NotificationCenter.default.post(name: .showSettings, object: nil)
     }
 

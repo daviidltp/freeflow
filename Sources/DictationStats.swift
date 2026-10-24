@@ -6,6 +6,92 @@ struct DictationStatEntry: Codable, Equatable {
     let words: Int
     /// Segundos grabados; nil en los dictados importados del historial antiguo.
     let seconds: Double?
+    /// App donde se dictó, para el reparto de uso; nil en dictados antiguos.
+    var appName: String? = nil
+    var bundleIdentifier: String? = nil
+    /// Palabras que la limpieza cambió respecto a la transcripción literal.
+    var correctedWords: Int? = nil
+    /// Veces que el diccionario (palabras o correcciones) aparece en el texto final.
+    var dictionaryFixes: Int? = nil
+}
+
+/// Tipos de uso que se muestran en "Desktop usage".
+enum UsageCategory: String, CaseIterable {
+    case aiPrompts = "AI prompts"
+    case emails = "Emails"
+    case workMessages = "Work messages"
+    case personalMessages = "Personal messages"
+    case documents = "Documents"
+    case other = "Other tasks"
+
+    var icon: String {
+        switch self {
+        case .aiPrompts: return "cpu"
+        case .emails: return "envelope"
+        case .workMessages: return "text.bubble"
+        case .personalMessages: return "message"
+        case .documents: return "doc.text"
+        case .other: return "infinity"
+        }
+    }
+
+    /// Clasifica por el identificador o el nombre de la app; lo que no se reconoce va a "Other tasks".
+    static func category(appName: String?, bundleIdentifier: String?) -> UsageCategory {
+        let haystack = ((bundleIdentifier ?? "") + " " + (appName ?? "")).lowercased()
+        func matches(_ keys: [String]) -> Bool { keys.contains { haystack.contains($0) } }
+        if matches(["chatgpt", "openai", "claude", "anthropic", "cursor", "codex", "copilot", "gemini", "perplexity", "terminal", "iterm", "warp", "ghostty", "t3 code", "xcode", "vscode", "visual studio"]) { return .aiPrompts }
+        if matches(["com.apple.mail", "outlook", "spark", "superhuman", "airmail", "mimestream", "gmail"]) { return .emails }
+        if matches(["slack", "teams", "linear", "asana"]) { return .workMessages }
+        if matches(["whatsapp", "telegram", "imessage", "com.apple.mobilesms", "messages", "discord", "signal", "instagram"]) { return .personalMessages }
+        if matches(["pages", "word", "notion", "obsidian", "notes", "docs", "bear", "textedit", "pdf", "preview", "keynote", "numbers", "excel"]) { return .documents }
+        return .other
+    }
+}
+
+/// Cálculos puros sobre un dictado ya terminado.
+enum DictationFixes {
+    private static func normalizedWords(_ text: String) -> [String] {
+        text.lowercased()
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+    }
+
+    /// Palabras de la transcripción literal que ya no aparecen en el texto final (muletillas, errores, cambios).
+    static func correctedWords(raw: String, processed: String) -> Int {
+        var remaining: [String: Int] = [:]
+        for word in normalizedWords(processed) { remaining[word, default: 0] += 1 }
+        var corrected = 0
+        for word in normalizedWords(raw) {
+            if let count = remaining[word], count > 0 {
+                remaining[word] = count - 1
+            } else {
+                corrected += 1
+            }
+        }
+        return corrected
+    }
+
+    /// Cuántas veces aparecen en el texto final las palabras del diccionario y los destinos de las correcciones.
+    static func dictionaryFixes(in text: String, vocabulary: String, replacementRules: String) -> Int {
+        var terms = vocabulary
+            .split(whereSeparator: { $0 == "\n" || $0 == "," || $0 == ";" })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        for line in replacementRules.split(whereSeparator: \.isNewline) {
+            let parts = line.components(separatedBy: "=>")
+            if parts.count == 2 { terms.append(parts[1].trimmingCharacters(in: .whitespacesAndNewlines)) }
+        }
+        let lowered = text.lowercased()
+        var total = 0
+        for term in Set(terms.filter { !$0.isEmpty }) {
+            let needle = term.lowercased()
+            var searchRange = lowered.startIndex..<lowered.endIndex
+            while let found = lowered.range(of: needle, range: searchRange) {
+                total += 1
+                searchRange = found.upperBound..<lowered.endIndex
+            }
+        }
+        return total
+    }
 }
 
 /// Estadísticas de la pantalla Home (racha, palabras, palabras por minuto).
@@ -37,9 +123,25 @@ final class DictationStatsStore: ObservableObject {
 
     // MARK: Escritura
 
-    func record(words: Int, seconds: Double?, date: Date = Date()) {
+    func record(
+        words: Int,
+        seconds: Double?,
+        date: Date = Date(),
+        appName: String? = nil,
+        bundleIdentifier: String? = nil,
+        correctedWords: Int? = nil,
+        dictionaryFixes: Int? = nil
+    ) {
         guard words > 0 else { return }
-        entries.append(DictationStatEntry(date: date, words: words, seconds: seconds))
+        entries.append(DictationStatEntry(
+            date: date,
+            words: words,
+            seconds: seconds,
+            appName: appName,
+            bundleIdentifier: bundleIdentifier,
+            correctedWords: correctedWords,
+            dictionaryFixes: dictionaryFixes
+        ))
         save()
     }
 
@@ -87,6 +189,24 @@ final class DictationStatsStore: ObservableObject {
             guard let day = calendar.date(byAdding: .day, value: -offset, to: today) else { return nil }
             return (day, totals[day] ?? 0)
         }
+    }
+
+    /// La racha más larga de días seguidos con dictados.
+    func longestStreak() -> Int {
+        let days = Set(entries.map { calendar.startOfDay(for: $0.date) }).sorted()
+        var best = 0
+        var current = 0
+        var previous: Date?
+        for day in days {
+            if let previous, calendar.date(byAdding: .day, value: 1, to: previous) == day {
+                current += 1
+            } else {
+                current = 1
+            }
+            best = max(best, current)
+            previous = day
+        }
+        return best
     }
 
     /// Días seguidos con al menos un dictado. Si hoy aún no has dictado, la racha de ayer sigue viva.

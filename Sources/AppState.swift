@@ -26,7 +26,6 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     case snippets
     case style
     case insights
-    case runLog
     case settings
     case debug
 
@@ -40,12 +39,11 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .home: return "Home"
+        case .home: return "Dictation"
         case .dictionary: return "Dictionary"
         case .snippets: return "Snippets"
         case .style: return "Style"
         case .insights: return "Insights"
-        case .runLog: return "Run Log"
         case .settings: return "Settings"
         case .debug: return "Debug"
         }
@@ -53,12 +51,11 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
-        case .home: return "house"
+        case .home: return "mic"
         case .dictionary: return "character.book.closed"
         case .snippets: return "scissors"
         case .style: return "textformat"
         case .insights: return "chart.bar"
-        case .runLog: return "clock.arrow.circlepath"
         case .settings: return "gearshape"
         case .debug: return "wrench.and.screwdriver"
         }
@@ -3053,7 +3050,15 @@ final class AppState: ObservableObject, @unchecked Sendable {
             let finalText = postProcessedTranscript.isEmpty ? rawTranscript : postProcessedTranscript
             dictationStats.record(
                 words: DictationStatsStore.wordCount(in: finalText),
-                seconds: lastRecordingSeconds
+                seconds: lastRecordingSeconds,
+                appName: context.appName,
+                bundleIdentifier: context.bundleIdentifier,
+                correctedWords: DictationFixes.correctedWords(raw: rawTranscript, processed: finalText),
+                dictionaryFixes: DictationFixes.dictionaryFixes(
+                    in: finalText,
+                    vocabulary: customVocabulary,
+                    replacementRules: UserDefaults.standard.string(forKey: VocabularyReplacements.storageKey) ?? ""
+                )
             )
             lastRecordingSeconds = nil
         } catch {
@@ -3365,7 +3370,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     }
 
     func toggleDebugPanel() {
-        selectedSettingsTab = .runLog
+        selectedSettingsTab = .home
         NotificationCenter.default.post(name: .showSettings, object: nil)
     }
 

@@ -31,6 +31,18 @@ enum DictationStatsTests {
         TestSupport.expectEqual(week[4].words, 10)
         TestSupport.expectEqual(week[0].words, 0)
         TestSupport.expectEqual(store.dictationCount, 3)
+        TestSupport.expectEqual(store.longestStreak(), 3)
+        store.record(words: 5, seconds: 3, date: now.addingTimeInterval(-10 * day))
+        TestSupport.expectEqual(store.longestStreak(), 3)
+
+        TestSupport.expectEqual(DictationFixes.correctedWords(raw: "um so hola eh mundo", processed: "So, hola mundo."), 2)
+        TestSupport.expectEqual(
+            DictationFixes.dictionaryFixes(in: "Cutmax y cutmax, Budky", vocabulary: "Cutmax", replacementRules: "budgy => Budky"),
+            3
+        )
+        TestSupport.expectEqual(UsageCategory.category(appName: "Slack", bundleIdentifier: "com.tinyspeck.slackmacgap"), .workMessages)
+        TestSupport.expectEqual(UsageCategory.category(appName: "Claude", bundleIdentifier: nil), .aiPrompts)
+        TestSupport.expectEqual(UsageCategory.category(appName: "Figma", bundleIdentifier: nil), .other)
 
         // Si hoy aún no se ha dictado, la racha de ayer sigue viva; si falta un día entero, se rompe.
         TestSupport.expectEqual(store.currentStreak(now: now.addingTimeInterval(day)), 3)

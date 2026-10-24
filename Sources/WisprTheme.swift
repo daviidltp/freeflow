@@ -25,6 +25,12 @@ enum WisprPalette {
     static let vast925 = Color(hex: 0x202020)
     static let vast950 = Color(hex: 0x1A1A1A)
 
+    /// Verdes azulados de las gráficas de Insights, de más oscuro a más claro.
+    static let teal900 = Color(hex: 0x2D5B5E)
+    static let teal700 = Color(hex: 0x4A918B)
+    static let teal500 = Color(hex: 0x86BFB6)
+    static let teal200 = Color(hex: 0xCDE8E6)
+
     static let lumen = Color(hex: 0xFFFFEB)
     static let red = Color(hex: 0xFF5757)
     static let green = Color(hex: 0x10B981)
