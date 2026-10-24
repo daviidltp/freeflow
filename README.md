@@ -9,8 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/zachlatta/freeflow/releases/latest/download/FreeFlow.dmg"><b>⬇ Download FreeFlow.dmg</b></a><br>
-  <sub>Works on all Macs (Apple Silicon + Intel)</sub>
+  <sub>Fork de <a href="https://github.com/zachlatta/freeflow">zachlatta/freeflow</a> con mejoras propias · Apple Silicon e Intel</sub>
 </p>
 
 ---
@@ -27,11 +26,43 @@
 
 FreeFlow is a free Mac dictation app inspired by [Wispr Flow](https://wisprflow.ai/), [Superwhisper](https://superwhisper.com/), and [Monologue](https://www.monologue.to/). It gives you fast AI transcription, context-aware cleanup, and voice-driven text editing without a monthly subscription.
 
-## Quick Start
+## Instalación
 
-1. Download the app from above or [click here](https://github.com/zachlatta/freeflow/releases/latest/download/FreeFlow.dmg)
-2. Get a free Groq API key from [groq.com](https://groq.com/)
-3. Hold `Fn` to talk, or tap `Command-Fn` to start and stop dictation, and have whatever you say pasted into the current text field
+Esta versión no está firmada ni notarizada por Apple (no hay cuenta de pago detrás), así que **no hay un `.dmg` que descargar**: la compilas en tu Mac con un solo comando y macOS no la bloquea.
+
+**Qué diferencia a este fork del original:** el vocabulario personalizado se envía también a Whisper y se aplican reemplazos fijos tras la limpieza, se restaura la capitalización de los términos cuando Whisper los grita en mayúsculas, hay icono en blanco y negro y las actualizaciones apuntan a este repo.
+
+### Requisitos
+
+- Un Mac con macOS 13 o superior.
+- Las herramientas de línea de comandos de Apple. Si no las tienes: `xcode-select --install`.
+- Una API key gratuita de [Groq](https://console.groq.com/keys) (o cualquier proveedor compatible con OpenAI).
+
+### Pasos
+
+```bash
+git clone https://github.com/daviidltp/freeflow.git
+cd freeflow
+./install.sh
+```
+
+El script compila la app (un par de minutos la primera vez), la copia a `/Applications` y la abre.
+
+### Primer arranque
+
+1. Concede los permisos que pide: **Micrófono**, **Accesibilidad** (para pegar el texto) y **Reconocimiento de voz**.
+2. Pega tu API key de Groq en los ajustes.
+3. Mantén pulsada `Fn` para hablar, o pulsa `Command-Fn` para empezar y parar. El texto se pega en el campo activo.
+
+### Si algo falla
+
+- **"No se puede abrir porque no se puede verificar al desarrollador"**: solo pasa si has copiado la app desde otro Mac. Ejecuta `xattr -dr com.apple.quarantine /Applications/FreeFlow.app` o haz clic derecho → Abrir.
+- **Los permisos desaparecen tras recompilar**: al firmar sin identidad (ad-hoc) macOS trata cada compilación como una app nueva. Vuelve a conceder Micrófono y Accesibilidad en Ajustes del Sistema → Privacidad y seguridad (quita la entrada vieja y añade la nueva).
+- **Actualizar**: `git pull && ./install.sh`.
+
+### Modificarla
+
+Es código abierto (MIT). Haz tu propio fork, cámbialo (con Claude Code, Codex o a mano) y vuelve a ejecutar `./install.sh`. Más detalles en [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Features
 
