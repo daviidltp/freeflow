@@ -70,6 +70,9 @@ final class RecordingOverlayManager {
     private var dropTargetsPanel: NSPanel?
     private var dropHighlight: IslandAnchor?
     private var screenObserver: NSObjectProtocol?
+    private var shrinkWorkItem: DispatchWorkItem?
+    private var hoverTimer: Timer?
+    private var hoverExitTicks = 0
 
     var onStopButtonPressed: (() -> Void)?
     var onCancelButtonPressed: (() -> Void)?
@@ -193,7 +196,7 @@ final class RecordingOverlayManager {
 
     func showTranscribing() {
         DispatchQueue.main.async {
-            self.lockedOverlayWidth = self.panel?.frame.width ?? self.overlayWidth
+            self.lockedOverlayWidth = self.overlayWidth
             self.overlayState.phase = .transcribing
             self.showOverlayPanel(animated: true)
         }
@@ -296,7 +299,6 @@ final class RecordingOverlayManager {
             onCancelButtonPressed: { [weak self] in self?.onCancelButtonPressed?() },
             onUpdateOverlayPressed: { [weak self] in self?.onUpdateOverlayPressed?() },
             onIdlePress: { [weak self] in self?.onIdleDictatePressed?() },
-            onHoverChange: { [weak self] hovering in self?.setIdleHover(hovering) },
             onDragChanged: { [weak self] in self?.idleDragChanged() },
             onDragEnded: { [weak self] in self?.idleDragEnded() }
         )
@@ -304,6 +306,7 @@ final class RecordingOverlayManager {
         hosting.autoresizingMask = [.width, .height]
         panel.contentView = hosting
 
+        startHoverTracking()
         if screenObserver == nil {
             screenObserver = NotificationCenter.default.addObserver(
                 forName: NSApplication.didChangeScreenParametersNotification,
@@ -333,6 +336,7 @@ final class RecordingOverlayManager {
     }
 
     private func closePanel(animated: Bool) {
+        stopHoverTracking()
         hideDropTargets()
         guard let closing = panel else { return }
         panel = nil
@@ -379,13 +383,16 @@ final class RecordingOverlayManager {
         let visible = screen.visibleFrame
         let size: CGSize
         let shape: CGSize
-        var edgeInset: CGFloat = 3
+        let edgeInset = WisprIsland.bottomMargin
 
         switch overlayState.phase {
         case .idle:
             if overlayState.isDragging {
                 size = CGSize(width: 56, height: 40)
                 shape = CGSize(width: 44, height: 28)
+            } else if overlayState.idleHover && anchor.isVertical {
+                size = CGSize(width: 170, height: 64)
+                shape = CGSize(width: 28, height: 48)
             } else if overlayState.idleHover {
                 size = CGSize(width: 150, height: 90)
                 shape = CGSize(width: 48, height: 28)
@@ -397,9 +404,14 @@ final class RecordingOverlayManager {
                 shape = CGSize(width: 38, height: 6)
             }
         default:
-            size = CGSize(width: overlayWidth, height: overlayHeight)
+            // En los laterales la isla se pone en vertical (salvo avisos con texto, que no caben).
+            let isTextPhase = overlayState.phase == .feedback || overlayState.phase == .updateAvailable
+            if anchor.isVertical && !isTextPhase {
+                size = CGSize(width: overlayHeight, height: overlayWidth)
+            } else {
+                size = CGSize(width: overlayWidth, height: overlayHeight)
+            }
             shape = size
-            edgeInset = WisprIsland.bottomMargin
         }
 
         if overlayState.phase == .idle && overlayState.isDragging {
@@ -425,15 +437,25 @@ final class RecordingOverlayManager {
         overlayState.anchor = IslandAnchor.current
         overlayState.shapeSize = target.shape
         panel.ignoresMouseEvents = !panelAcceptsMouse
+        shrinkWorkItem?.cancel()
 
         guard animated, !overlayState.isDragging else {
             panel.setFrame(target.frame, display: true)
             return
         }
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.26
-            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1.0, 0.36, 1.0)
-            panel.animator().setFrame(target.frame, display: true)
+
+        // La forma se anima con un resorte dentro del panel. Si el panel encogiera de golpe,
+        // recortaría los lados de la forma (bordes cuadrados): primero se abre al tamaño
+        // máximo y solo se ajusta al final cuando la forma ya ha terminado de moverse.
+        let union = panel.frame.union(target.frame)
+        panel.setFrame(union, display: true)
+        if union != target.frame {
+            let item = DispatchWorkItem { [weak self, weak panel] in
+                guard let self, let panel, self.panel === panel else { return }
+                panel.setFrame(target.frame, display: true)
+            }
+            shrinkWorkItem = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: item)
         }
     }
 
@@ -455,7 +477,8 @@ final class RecordingOverlayManager {
         case .updateAvailable:
             return 168
         case .idle, .initializing, .recording, .transcribing:
-            var width: CGFloat = 20 * 2 + CGFloat(WisprIsland.barCount) * (WisprIsland.barWidth + WisprIsland.barSpacing) - WisprIsland.barSpacing
+            // Hueco extra a los lados para que, al procesar, quepa el indicador de progreso sin cambiar el ancho.
+            var width: CGFloat = 33 * 2 + CGFloat(WisprIsland.barCount) * (WisprIsland.barWidth + WisprIsland.barSpacing) - WisprIsland.barSpacing
             if overlayState.phase == .recording {
                 if overlayState.recordingTriggerMode == .toggle {
                     width += (WisprIsland.buttonSize + 8) * 2 - 16
@@ -469,10 +492,47 @@ final class RecordingOverlayManager {
 
     // MARK: Hover and drag (idle bar)
 
-    private func setIdleHover(_ hovering: Bool) {
-        guard overlayState.phase == .idle, !overlayState.isDragging, overlayState.idleHover != hovering else { return }
-        overlayState.idleHover = hovering
-        applyLayout(animated: true)
+    /// Detecta el ratón por su posición en pantalla, no con onHover de SwiftUI: al cambiar el
+    /// tamaño del panel, onHover se disparaba varias veces y la isla se abría y cerraba sola.
+    private func startHoverTracking() {
+        hoverTimer?.invalidate()
+        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in self?.hoverTick() }
+        RunLoop.main.add(timer, forMode: .common)
+        hoverTimer = timer
+    }
+
+    private func stopHoverTracking() {
+        hoverTimer?.invalidate()
+        hoverTimer = nil
+        hoverExitTicks = 0
+    }
+
+    private func hoverTick() {
+        guard overlayState.phase == .idle, !overlayState.isDragging, let screen = targetScreen else { return }
+        // La zona sale del diseño actual (no del panel, que puede estar aún encogiéndose).
+        let hotFrame = layout(on: screen).frame
+        let mouse = NSEvent.mouseLocation
+        if overlayState.idleHover {
+            // Abierta: se queda abierta mientras el ratón esté sobre la zona de la isla (con margen).
+            let zone = hotFrame.insetBy(dx: -6, dy: -6)
+            if zone.contains(mouse) {
+                hoverExitTicks = 0
+            } else {
+                hoverExitTicks += 1
+                if hoverExitTicks >= 4 { // ~130 ms fuera antes de cerrar
+                    hoverExitTicks = 0
+                    overlayState.idleHover = false
+                    applyLayout(animated: true)
+                }
+            }
+        } else {
+            let zone = hotFrame.insetBy(dx: -4, dy: -4)
+            if zone.contains(mouse) {
+                hoverExitTicks = 0
+                overlayState.idleHover = true
+                applyLayout(animated: true)
+            }
+        }
     }
 
     private func nearestAnchor(to point: NSPoint, on screen: NSScreen) -> IslandAnchor {
@@ -559,7 +619,6 @@ struct WisprIslandView: View {
     let onCancelButtonPressed: () -> Void
     let onUpdateOverlayPressed: () -> Void
     let onIdlePress: () -> Void
-    let onHoverChange: (Bool) -> Void
     let onDragChanged: () -> Void
     let onDragEnded: () -> Void
 
@@ -571,13 +630,22 @@ struct WisprIslandView: View {
         state.phase == .recording && state.recordingTriggerMode == .toggle
     }
 
-    /// Dónde se ancla la forma dentro del panel: pegada al borde en hover, centrada en el resto.
+    /// Dónde se ancla la forma dentro del panel: pegada al borde del anclaje, para que crezca
+    /// hacia dentro de la pantalla y la barrita y el chip compartan el mismo borde.
     private var containerAlignment: Alignment {
-        guard isIdle, state.idleHover else { return .center }
+        if state.isDragging { return .center }
         switch state.anchor {
         case .bottom: return .bottom
         case .left: return .leading
         case .right: return .trailing
+        }
+    }
+
+    private var isVerticalLayout: Bool {
+        guard state.anchor.isVertical else { return false }
+        switch state.phase {
+        case .initializing, .recording, .transcribing: return true
+        default: return false
         }
     }
 
@@ -588,16 +656,16 @@ struct WisprIslandView: View {
             Color.clear
             shape
                 .frame(width: state.shapeSize.width, height: state.shapeSize.height)
-                .overlay(alignment: .top) {
+                .overlay(alignment: tooltipAlignment) {
                     if isIdle && state.idleHover && !state.isDragging {
                         tooltip
-                            .offset(y: -38)
+                            .alignmentGuide(tooltipHorizontalGuide) { d in tooltipOffset(d) }
+                            .alignmentGuide(tooltipVerticalGuide) { d in tooltipVerticalOffset(d) }
                             .transition(.opacity)
                     }
                 }
         }
         .contentShape(Rectangle())
-        .onHover { onHoverChange($0) }
         .simultaneousGesture(
             DragGesture(minimumDistance: 4, coordinateSpace: .global)
                 .onChanged { _ in if isIdle { onDragChanged() } }
@@ -615,8 +683,47 @@ struct WisprIslandView: View {
             Capsule(style: .continuous)
                 .strokeBorder(isCollapsedBar || (isIdle && state.idleHover) ? WisprPalette.vast700.opacity(0.7) : WisprIsland.border, lineWidth: 1)
             content
-                .padding(.horizontal, showsButtons ? 5 : (isIdle ? 0 : 20))
+                .padding(isVerticalLayout ? .vertical : .horizontal, showsButtons ? 5 : (isIdle ? 0 : 20))
                 .transition(.opacity)
+        }
+    }
+
+    /// El texto "Dictate fn" va encima de la barra abajo, y hacia dentro de la pantalla en los laterales.
+    private var tooltipAlignment: Alignment {
+        switch state.anchor {
+        case .bottom: return .top
+        case .left: return .trailing
+        case .right: return .leading
+        }
+    }
+
+    private var tooltipHorizontalGuide: HorizontalAlignment {
+        switch state.anchor {
+        case .bottom: return .center
+        case .left: return .trailing
+        case .right: return .leading
+        }
+    }
+
+    private var tooltipVerticalGuide: VerticalAlignment {
+        switch state.anchor {
+        case .bottom: return .top
+        case .left, .right: return .center
+        }
+    }
+
+    private func tooltipOffset(_ d: ViewDimensions) -> CGFloat {
+        switch state.anchor {
+        case .bottom: return d[HorizontalAlignment.center]
+        case .left: return d[.leading] - 10
+        case .right: return d[.trailing] + 10
+        }
+    }
+
+    private func tooltipVerticalOffset(_ d: ViewDimensions) -> CGFloat {
+        switch state.anchor {
+        case .bottom: return d[.bottom] + 8
+        case .left, .right: return d[VerticalAlignment.center]
         }
     }
 
@@ -664,11 +771,14 @@ struct WisprIslandView: View {
         case .updateAvailable:
             IslandUpdateView(onPress: onUpdateOverlayPressed)
         case .initializing:
-            IslandDotsView()
+            IslandDotsView(isVertical: isVerticalLayout)
         case .transcribing:
-            IslandProcessingView()
+            IslandStack(isVertical: isVerticalLayout, spacing: 10) {
+                IslandWaveformView(levels: state.levelHistory, isProcessing: true, isVertical: isVerticalLayout)
+                IslandSpinner()
+            }
         case .recording:
-            HStack(spacing: 8) {
+            IslandStack(isVertical: isVerticalLayout, spacing: 8) {
                 if showsButtons {
                     IslandCircleButton(systemName: "xmark", action: onCancelButtonPressed)
                         .accessibilityLabel("Cancel dictation")
@@ -681,13 +791,28 @@ struct WisprIslandView: View {
                 if state.showsRecordingTimer, let start = state.recordingStartedAt {
                     IslandElapsedTimeView(start: start)
                 }
-                IslandWaveformView(levels: state.levelHistory)
-                    .frame(maxWidth: .infinity)
+                IslandWaveformView(levels: state.levelHistory, isVertical: isVerticalLayout)
+                    .frame(maxWidth: isVerticalLayout ? nil : .infinity, maxHeight: isVerticalLayout ? .infinity : nil)
                 if showsButtons {
                     IslandCircleButton(systemName: "stop.fill", action: onStopButtonPressed)
                         .accessibilityLabel("Stop dictation")
                 }
             }
+        }
+    }
+}
+
+/// HStack o VStack según la orientación de la isla.
+struct IslandStack<Content: View>: View {
+    let isVertical: Bool
+    let spacing: CGFloat
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        if isVertical {
+            VStack(spacing: spacing) { content }
+        } else {
+            HStack(spacing: spacing) { content }
         }
     }
 }
@@ -715,22 +840,38 @@ private struct IslandCircleButton: View {
 /// Barras blancas de 2 pt que se desplazan con el historial reciente del micrófono.
 struct IslandWaveformView: View {
     let levels: [Float]
+    var isProcessing = false
+    var isVertical = false
 
     var body: some View {
-        HStack(spacing: WisprIsland.barSpacing) {
-            ForEach(Array(levels.enumerated()), id: \.offset) { index, level in
-                RoundedRectangle(cornerRadius: 1, style: .continuous)
-                    .fill(Color.white.opacity(0.4 + 0.6 * edgeFade(index)))
-                    .frame(width: WisprIsland.barWidth, height: height(for: level))
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !isProcessing)) { context in
+            let time = context.date.timeIntervalSinceReferenceDate
+            IslandStack(isVertical: isVertical, spacing: WisprIsland.barSpacing) {
+                ForEach(Array(levels.enumerated()), id: \.offset) { index, level in
+                    RoundedRectangle(cornerRadius: 1, style: .continuous)
+                        .fill(Color.white.opacity(opacity(index, time: time)))
+                        .frame(
+                            width: isVertical ? height(for: level) : WisprIsland.barWidth,
+                            height: isVertical ? WisprIsland.barWidth : height(for: level)
+                        )
+                }
             }
         }
-        .frame(height: WisprIsland.maxBarHeight)
+        .frame(width: isVertical ? WisprIsland.maxBarHeight : nil, height: isVertical ? nil : WisprIsland.maxBarHeight)
         .animation(.easeOut(duration: 0.09), value: levels)
     }
 
     private func height(for level: Float) -> CGFloat {
         let amplitude = CGFloat(min(max(level, 0), 1))
         return WisprIsland.minBarHeight + (WisprIsland.maxBarHeight - WisprIsland.minBarHeight) * amplitude
+    }
+
+    private func opacity(_ index: Int, time: TimeInterval) -> Double {
+        let fade = 0.4 + 0.6 * edgeFade(index)
+        guard isProcessing else { return fade }
+        // Al procesar, una ola de brillo recorre la onda congelada.
+        let wave = 0.5 + 0.5 * sin(time * 5.0 - Double(index) * 0.45)
+        return fade * (0.35 + 0.65 * wave)
     }
 
     /// Las barras de los extremos se atenúan un poco.
@@ -741,13 +882,29 @@ struct IslandWaveformView: View {
     }
 }
 
+/// Indicador de progreso circular de la isla.
+struct IslandSpinner: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+            let time = context.date.timeIntervalSinceReferenceDate
+            Circle()
+                .trim(from: 0.12, to: 0.88)
+                .stroke(Color.white, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .rotationEffect(.degrees((time * 400).truncatingRemainder(dividingBy: 360)))
+                .frame(width: 14, height: 14)
+        }
+        .frame(width: 14, height: 14)
+    }
+}
+
 /// Tres puntos de carga mientras arranca el micrófono.
 struct IslandDotsView: View {
+    var isVertical = false
     @State private var activeDot = 0
     @State private var timer: Timer?
 
     var body: some View {
-        HStack(spacing: 5) {
+        IslandStack(isVertical: isVertical, spacing: 5) {
             ForEach(0..<3, id: \.self) { index in
                 Circle()
                     .fill(.white.opacity(activeDot == index ? 0.95 : 0.3))
@@ -765,24 +922,6 @@ struct IslandDotsView: View {
         .onDisappear {
             timer?.invalidate()
             timer = nil
-        }
-    }
-}
-
-/// Mientras se transcribe: barras bajas con una ola de brillo que las recorre.
-struct IslandProcessingView: View {
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
-            let time = context.date.timeIntervalSinceReferenceDate
-            HStack(spacing: WisprIsland.barSpacing) {
-                ForEach(0..<WisprIsland.barCount, id: \.self) { index in
-                    let wave = 0.5 + 0.5 * sin(time * 5.0 - Double(index) * 0.45)
-                    RoundedRectangle(cornerRadius: 1, style: .continuous)
-                        .fill(Color.white.opacity(0.25 + 0.65 * wave))
-                        .frame(width: WisprIsland.barWidth, height: 3)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
