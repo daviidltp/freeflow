@@ -70,7 +70,6 @@ final class RecordingOverlayManager {
     private var dropTargetsPanel: NSPanel?
     private var dropHighlight: IslandAnchor?
     private var screenObserver: NSObjectProtocol?
-    private var shrinkWorkItem: DispatchWorkItem?
     private var hoverTimer: Timer?
     private var hoverExitTicks = 0
 
@@ -278,7 +277,7 @@ final class RecordingOverlayManager {
 
     private func makePanel() -> NSPanel {
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 52, height: 20),
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 110),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -373,90 +372,90 @@ final class RecordingOverlayManager {
 
     // MARK: Layout
 
-    private struct Layout {
-        let frame: NSRect
-        let shape: CGSize
+    /// Medidas del escenario transparente donde vive la isla. Tiene tamaño fijo por anclaje:
+    /// la forma se anima dentro de él, así el panel nunca cambia de tamaño mientras se abre o cierra.
+    private func stageSize(for anchor: IslandAnchor) -> CGSize {
+        anchor.isVertical ? CGSize(width: 480, height: 300) : CGSize(width: 480, height: 110)
     }
 
-    private func layout(on screen: NSScreen) -> Layout {
+    private func stageFrame(on screen: NSScreen) -> NSRect {
         let anchor = IslandAnchor.current
         let visible = screen.visibleFrame
-        let size: CGSize
-        let shape: CGSize
-        let edgeInset = WisprIsland.bottomMargin
+        let size = stageSize(for: anchor)
+        let inset = WisprIsland.bottomMargin
+        if overlayState.isDragging {
+            let mouse = NSEvent.mouseLocation
+            return NSRect(x: mouse.x - size.width / 2, y: mouse.y - size.height / 2, width: size.width, height: size.height)
+        }
+        switch anchor {
+        case .bottom:
+            return NSRect(x: screen.frame.midX - size.width / 2, y: visible.minY + inset, width: size.width, height: size.height)
+        case .left:
+            return NSRect(x: visible.minX + inset, y: visible.midY - size.height / 2, width: size.width, height: size.height)
+        case .right:
+            return NSRect(x: visible.maxX - size.width - inset, y: visible.midY - size.height / 2, width: size.width, height: size.height)
+        }
+    }
 
+    /// Tamaño que debe tener la forma visible en el estado actual.
+    private func shapeSize() -> CGSize {
+        let anchor = IslandAnchor.current
         switch overlayState.phase {
         case .idle:
-            if overlayState.isDragging {
-                size = CGSize(width: 56, height: 40)
-                shape = CGSize(width: 44, height: 28)
-            } else if overlayState.idleHover && anchor.isVertical {
-                size = CGSize(width: 170, height: 64)
-                shape = CGSize(width: 28, height: 48)
-            } else if overlayState.idleHover {
-                size = CGSize(width: 150, height: 90)
-                shape = CGSize(width: 48, height: 28)
-            } else if anchor.isVertical {
-                size = CGSize(width: 20, height: 52)
-                shape = CGSize(width: 6, height: 38)
-            } else {
-                size = CGSize(width: 52, height: 20)
-                shape = CGSize(width: 38, height: 6)
-            }
+            if overlayState.isDragging { return CGSize(width: 44, height: 28) }
+            if overlayState.idleHover { return anchor.isVertical ? CGSize(width: 30, height: 50) : CGSize(width: 50, height: 30) }
+            return anchor.isVertical ? CGSize(width: 6, height: 38) : CGSize(width: 38, height: 6)
         default:
             // En los laterales la isla se pone en vertical (salvo avisos con texto, que no caben).
             let isTextPhase = overlayState.phase == .feedback || overlayState.phase == .updateAvailable
             if anchor.isVertical && !isTextPhase {
-                size = CGSize(width: overlayHeight, height: overlayWidth)
-            } else {
-                size = CGSize(width: overlayWidth, height: overlayHeight)
+                return CGSize(width: overlayHeight, height: overlayWidth)
             }
-            shape = size
+            return CGSize(width: overlayWidth, height: overlayHeight)
         }
+    }
 
-        if overlayState.phase == .idle && overlayState.isDragging {
-            let mouse = NSEvent.mouseLocation
-            return Layout(frame: NSRect(x: mouse.x - size.width / 2, y: mouse.y - size.height / 2, width: size.width, height: size.height), shape: shape)
+    /// Dónde queda la forma dentro del escenario, en coordenadas de pantalla.
+    private func shapeScreenRect(stage: NSRect, shape: CGSize) -> NSRect {
+        if overlayState.isDragging {
+            return NSRect(x: stage.midX - shape.width / 2, y: stage.midY - shape.height / 2, width: shape.width, height: shape.height)
         }
-
-        let origin: NSPoint
-        switch anchor {
+        switch IslandAnchor.current {
         case .bottom:
-            origin = NSPoint(x: screen.frame.midX - size.width / 2, y: visible.minY + edgeInset)
+            return NSRect(x: stage.midX - shape.width / 2, y: stage.minY, width: shape.width, height: shape.height)
         case .left:
-            origin = NSPoint(x: visible.minX + edgeInset, y: visible.midY - size.height / 2)
+            return NSRect(x: stage.minX, y: stage.midY - shape.height / 2, width: shape.width, height: shape.height)
         case .right:
-            origin = NSPoint(x: visible.maxX - size.width - edgeInset, y: visible.midY - size.height / 2)
+            return NSRect(x: stage.maxX - shape.width, y: stage.midY - shape.height / 2, width: shape.width, height: shape.height)
         }
-        return Layout(frame: NSRect(origin: origin, size: size), shape: shape)
     }
 
     private func applyLayout(animated: Bool) {
         guard let panel, let screen = targetScreen else { return }
-        let target = layout(on: screen)
+        let stage = stageFrame(on: screen)
         overlayState.anchor = IslandAnchor.current
-        overlayState.shapeSize = target.shape
-        panel.ignoresMouseEvents = !panelAcceptsMouse
-        shrinkWorkItem?.cancel()
+        let size = shapeSize()
+        if animated {
+            overlayState.shapeSize = size
+        } else {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { overlayState.shapeSize = size }
+        }
+        if panel.frame != stage { panel.setFrame(stage, display: true) }
+        updateMouseGating()
+    }
 
-        guard animated, !overlayState.isDragging else {
-            panel.setFrame(target.frame, display: true)
+    /// El escenario es mucho más grande que la forma: solo captura el ratón sobre la forma
+    /// (con margen) y cuando hay algo que pulsar; en el resto deja pasar los clics.
+    private func updateMouseGating() {
+        guard let panel, let screen = targetScreen else { return }
+        guard panelAcceptsMouse else {
+            panel.ignoresMouseEvents = true
             return
         }
-
-        // La forma se anima con un resorte dentro del panel. Si el panel encogiera de golpe,
-        // recortaría los lados de la forma (bordes cuadrados): primero se abre al tamaño
-        // máximo y solo se ajusta al final cuando la forma ya ha terminado de moverse.
-        let union = panel.frame.union(target.frame)
-        panel.setFrame(union, display: true)
-        if union != target.frame {
-            let item = DispatchWorkItem { [weak self, weak panel] in
-                guard let self, let panel, self.panel === panel else { return }
-                panel.setFrame(target.frame, display: true)
-            }
-            shrinkWorkItem = item
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: item)
-        }
+        let rect = shapeScreenRect(stage: stageFrame(on: screen), shape: shapeSize()).insetBy(dx: -8, dy: -8)
+        panel.ignoresMouseEvents = !rect.contains(NSEvent.mouseLocation)
     }
 
     private var overlayHeight: CGFloat {
@@ -477,8 +476,7 @@ final class RecordingOverlayManager {
         case .updateAvailable:
             return 168
         case .idle, .initializing, .recording, .transcribing:
-            // Hueco extra a los lados para que, al procesar, quepa el indicador de progreso sin cambiar el ancho.
-            var width: CGFloat = 33 * 2 + CGFloat(WisprIsland.barCount) * (WisprIsland.barWidth + WisprIsland.barSpacing) - WisprIsland.barSpacing
+            var width: CGFloat = 15 * 2 + CGFloat(WisprIsland.barCount) * (WisprIsland.barWidth + WisprIsland.barSpacing) - WisprIsland.barSpacing
             if overlayState.phase == .recording {
                 if overlayState.recordingTriggerMode == .toggle {
                     width += (WisprIsland.buttonSize + 8) * 2 - 16
@@ -508,14 +506,19 @@ final class RecordingOverlayManager {
     }
 
     private func hoverTick() {
-        guard overlayState.phase == .idle, !overlayState.isDragging, let screen = targetScreen else { return }
-        // La zona sale del diseño actual (no del panel, que puede estar aún encogiéndose).
-        let hotFrame = layout(on: screen).frame
+        guard panel != nil, let screen = targetScreen else { return }
+        updateMouseGating()
+        guard overlayState.phase == .idle, !overlayState.isDragging else { return }
+        let stage = stageFrame(on: screen)
+        let anchor = IslandAnchor.current
+        // Zona sensible: la barrita con margen; abierta, el chip y el texto "Dictate".
+        let barSize = anchor.isVertical ? CGSize(width: 20, height: 52) : CGSize(width: 52, height: 20)
+        let openSize = anchor.isVertical ? CGSize(width: 170, height: 64) : CGSize(width: 150, height: 90)
+        let hotSize = overlayState.idleHover ? openSize : barSize
+        let hot = shapeScreenRect(stage: stage, shape: hotSize).insetBy(dx: overlayState.idleHover ? -6 : -2, dy: overlayState.idleHover ? -6 : -2)
         let mouse = NSEvent.mouseLocation
         if overlayState.idleHover {
-            // Abierta: se queda abierta mientras el ratón esté sobre la zona de la isla (con margen).
-            let zone = hotFrame.insetBy(dx: -6, dy: -6)
-            if zone.contains(mouse) {
+            if hot.contains(mouse) {
                 hoverExitTicks = 0
             } else {
                 hoverExitTicks += 1
@@ -525,13 +528,10 @@ final class RecordingOverlayManager {
                     applyLayout(animated: true)
                 }
             }
-        } else {
-            let zone = hotFrame.insetBy(dx: -4, dy: -4)
-            if zone.contains(mouse) {
-                hoverExitTicks = 0
-                overlayState.idleHover = true
-                applyLayout(animated: true)
-            }
+        } else if hot.contains(mouse) {
+            hoverExitTicks = 0
+            overlayState.idleHover = true
+            applyLayout(animated: true)
         }
     }
 
@@ -656,21 +656,20 @@ struct WisprIslandView: View {
             Color.clear
             shape
                 .frame(width: state.shapeSize.width, height: state.shapeSize.height)
+                .contentShape(Capsule())
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 4, coordinateSpace: .global)
+                        .onChanged { _ in if isIdle { onDragChanged() } }
+                        .onEnded { _ in if isIdle { onDragEnded() } }
+                )
                 .overlay(alignment: tooltipAlignment) {
                     if isIdle && state.idleHover && !state.isDragging {
                         tooltip
-                            .alignmentGuide(tooltipHorizontalGuide) { d in tooltipOffset(d) }
-                            .alignmentGuide(tooltipVerticalGuide) { d in tooltipVerticalOffset(d) }
+                            .offset(tooltipOffset)
                             .transition(.opacity)
                     }
                 }
         }
-        .contentShape(Rectangle())
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 4, coordinateSpace: .global)
-                .onChanged { _ in if isIdle { onDragChanged() } }
-                .onEnded { _ in if isIdle { onDragEnded() } }
-        )
         .animation(spring, value: state.shapeSize)
         .animation(.easeInOut(duration: 0.2), value: state.phase)
         .animation(.easeInOut(duration: 0.2), value: state.idleHover)
@@ -683,7 +682,7 @@ struct WisprIslandView: View {
             Capsule(style: .continuous)
                 .strokeBorder(isCollapsedBar || (isIdle && state.idleHover) ? WisprPalette.vast700.opacity(0.7) : WisprIsland.border, lineWidth: 1)
             content
-                .padding(isVerticalLayout ? .vertical : .horizontal, showsButtons ? 5 : (isIdle ? 0 : 20))
+                .padding(isVerticalLayout ? .vertical : .horizontal, showsButtons ? 5 : (isIdle ? 0 : 15))
                 .transition(.opacity)
         }
     }
@@ -692,38 +691,17 @@ struct WisprIslandView: View {
     private var tooltipAlignment: Alignment {
         switch state.anchor {
         case .bottom: return .top
-        case .left: return .trailing
-        case .right: return .leading
+        case .left: return .leading
+        case .right: return .trailing
         }
     }
 
-    private var tooltipHorizontalGuide: HorizontalAlignment {
+    /// Separación del texto respecto a la forma: encima abajo, hacia dentro de la pantalla en los laterales.
+    private var tooltipOffset: CGSize {
         switch state.anchor {
-        case .bottom: return .center
-        case .left: return .trailing
-        case .right: return .leading
-        }
-    }
-
-    private var tooltipVerticalGuide: VerticalAlignment {
-        switch state.anchor {
-        case .bottom: return .top
-        case .left, .right: return .center
-        }
-    }
-
-    private func tooltipOffset(_ d: ViewDimensions) -> CGFloat {
-        switch state.anchor {
-        case .bottom: return d[HorizontalAlignment.center]
-        case .left: return d[.leading] - 10
-        case .right: return d[.trailing] + 10
-        }
-    }
-
-    private func tooltipVerticalOffset(_ d: ViewDimensions) -> CGFloat {
-        switch state.anchor {
-        case .bottom: return d[.bottom] + 8
-        case .left, .right: return d[VerticalAlignment.center]
+        case .bottom: return CGSize(width: 0, height: -(34 + 8))
+        case .left: return CGSize(width: state.shapeSize.width + 10, height: 0)
+        case .right: return CGSize(width: -(state.shapeSize.width + 10), height: 0)
         }
     }
 
@@ -732,10 +710,10 @@ struct WisprIslandView: View {
             Text("Dictate")
             Text(state.shortcutLabel).fontWeight(.bold)
         }
-        .font(WisprFonts.figtree(13, weight: .medium))
+        .font(WisprFonts.figtree(14, weight: .medium))
         .foregroundStyle(.white)
-        .padding(.horizontal, 14)
-        .frame(height: 30)
+        .padding(.horizontal, 16)
+        .frame(height: 34)
         .fixedSize()
         .background(Capsule().fill(Color.black))
         .overlay(Capsule().strokeBorder(WisprIsland.border, lineWidth: 1))
@@ -774,7 +752,7 @@ struct WisprIslandView: View {
             IslandDotsView(isVertical: isVerticalLayout)
         case .transcribing:
             IslandStack(isVertical: isVerticalLayout, spacing: 10) {
-                IslandWaveformView(levels: state.levelHistory, isProcessing: true, isVertical: isVerticalLayout)
+                IslandWaveformView(levels: Array(state.levelHistory.suffix(16)), isProcessing: true, isVertical: isVerticalLayout)
                 IslandSpinner()
             }
         case .recording:
