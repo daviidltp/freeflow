@@ -26,11 +26,14 @@
 
 FreeFlow is a free Mac dictation app inspired by [Wispr Flow](https://wisprflow.ai/), [Superwhisper](https://superwhisper.com/), and [Monologue](https://www.monologue.to/). It gives you fast AI transcription, context-aware cleanup, and voice-driven text editing without a monthly subscription.
 
-## Windows
-
-Hay una versión para Windows 10 y 11 con las mismas funciones. Se descarga como instalador `.exe` desde [Releases](https://github.com/daviidltp/freeflow/releases) (las que empiezan por `windows-v`). Instrucciones y diferencias con el Mac en [windows/README.md](windows/README.md).
-
 ## Instalación
+
+Elige tu sistema. Son dos apps distintas con las mismas funciones: la de Mac se compila en tu Mac y la de Windows se descarga como instalador.
+
+- [Instalar en macOS](#instalar-en-macos)
+- [Instalar en Windows](#instalar-en-windows)
+
+## Instalar en macOS
 
 Esta versión no está firmada ni notarizada por Apple (no hay cuenta de pago detrás), así que **no hay un `.dmg` que descargar**: la compilas en tu Mac con un solo comando y macOS no la bloquea.
 
@@ -67,6 +70,17 @@ El script compila la app (un par de minutos la primera vez), la copia a `/Applic
 ### Modificarla
 
 Es código abierto (MIT). Haz tu propio fork, cámbialo (con Claude Code, Codex o a mano) y vuelve a ejecutar `./install.sh`. Más detalles en [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Instalar en Windows
+
+Windows 10 u 11 (64 bits). Aquí sí hay instalador que descargar.
+
+1. Ve a [Releases](https://github.com/daviidltp/freeflow/releases) y descarga `FreeFlow-Setup-<versión>.exe` de la última release cuyo nombre empiece por `windows-v`.
+2. Ejecútalo. Windows avisará de que no está firmado: pulsa **Más información → Ejecutar de todas formas**.
+3. Abre FreeFlow, pega tu API key de [Groq](https://console.groq.com/keys) y pulsa **Guardar y comprobar**.
+4. Mantén `Ctrl + Win` para hablar, o pulsa `Ctrl + Win + Shift` para empezar y parar. No hay tecla `Fn` en Windows, y los atajos se cambian en **Atajos**.
+
+Diferencias con el Mac, cómo compilarla tú mismo y más detalles: [windows/README.md](windows/README.md).
 
 ## Features
 
