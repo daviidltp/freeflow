@@ -1,0 +1,54 @@
+{
+  "name": "freeflow-windows",
+  "productName": "FreeFlow",
+  "version": "0.1.0",
+  "description": "FreeFlow para Windows: dictado por voz con limpieza por IA",
+  "main": "src/main/main.js",
+  "author": "David López",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test \"test/*.test.js\"",
+    "dist": "electron-builder --win nsis --x64 --publish never"
+  },
+  "build": {
+    "appId": "com.daviidltp.freeflow",
+    "productName": "FreeFlow",
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/uiohook-napi/**",
+      "node_modules/active-win/**"
+    ],
+    "win": {
+      "icon": "assets/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "FreeFlow-Setup-${version}.${ext}"
+    },
+    "npmRebuild": false
+  },
+  "dependencies": {
+    "active-win": "^8.2.1",
+    "uiohook-napi": "^1.5.5"
+  },
+  "devDependencies": {
+    "electron": "^45.2.1",
+    "electron-builder": "^26.18.0"
+  }
+}

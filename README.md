@@ -26,6 +26,10 @@
 
 FreeFlow is a free Mac dictation app inspired by [Wispr Flow](https://wisprflow.ai/), [Superwhisper](https://superwhisper.com/), and [Monologue](https://www.monologue.to/). It gives you fast AI transcription, context-aware cleanup, and voice-driven text editing without a monthly subscription.
 
+## Windows
+
+Hay una versión para Windows 10 y 11 con las mismas funciones. Se descarga como instalador `.exe` desde [Releases](https://github.com/daviidltp/freeflow/releases) (las que empiezan por `windows-v`). Instrucciones y diferencias con el Mac en [windows/README.md](windows/README.md).
+
 ## Instalación
 
 Esta versión no está firmada ni notarizada por Apple (no hay cuenta de pago detrás), así que **no hay un `.dmg` que descargar**: la compilas en tu Mac con un solo comando y macOS no la bloquea.

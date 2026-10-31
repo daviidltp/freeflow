@@ -1,0 +1,54 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>FreeFlow</title>
+<style>
+  @font-face { font-family: Figtree; src: url('../../assets/fonts/Figtree-VariableFont_wght.ttf'); font-weight: 100 900; }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; font-family: Figtree, 'Segoe UI', sans-serif; }
+  body { display: flex; align-items: center; justify-content: center; }
+  #pill {
+    display: flex; align-items: center; justify-content: center; gap: 10px; min-width: 64px; max-width: 288px; height: 38px;
+    padding: 0 18px; border-radius: 19px; background: #111; color: #fff; font-size: 13px; font-weight: 500;
+    box-shadow: 0 6px 24px rgba(0,0,0,.35); opacity: 0; transform: translateY(8px) scale(.96);
+    transition: opacity .18s ease, transform .18s ease;
+  }
+  #pill.on { opacity: 1; transform: none; }
+  #pill.error { background: #7a1f1f; padding: 0 16px; height: auto; min-height: 38px; border-radius: 16px; text-align: center; line-height: 1.25; padding-top: 8px; padding-bottom: 8px; }
+  #bars { display: flex; align-items: center; gap: 3px; height: 22px; }
+  #bars i { width: 3px; height: 4px; border-radius: 2px; background: #fff; transition: height .06s linear; }
+  #spinner { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.3); border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  [hidden] { display: none !important; }
+</style></head>
+<body>
+  <div id="pill">
+    <div id="bars"></div>
+    <div id="spinner" hidden></div>
+    <span id="text" hidden></span>
+  </div>
+  <audio id="sfx" preload="auto"></audio>
+  <script>
+    const pill = document.getElementById('pill');
+    const bars = document.getElementById('bars');
+    const spinner = document.getElementById('spinner');
+    const text = document.getElementById('text');
+    const sfx = document.getElementById('sfx');
+    const N = 9;
+    const history = new Array(N).fill(0);
+    for (let i = 0; i < N; i += 1) bars.appendChild(document.createElement('i'));
+
+    function draw() {
+      [...bars.children].forEach((bar, i) => { bar.style.height = `${4 + history[i] * 18}px`; });
+    }
+    window.freeflow.onLevel((level) => { history.push(level); history.shift(); draw(); });
+    window.freeflow.onOverlay(({ state, message }) => {
+      pill.classList.toggle('error', state === 'error');
+      pill.classList.toggle('on', state !== 'hidden');
+      bars.hidden = state !== 'recording';
+      spinner.hidden = state !== 'processing';
+      text.hidden = state !== 'error';
+      text.textContent = message || '';
+      if (state === 'recording') history.fill(0);
+      draw();
+    });
+    window.freeflow.onSound((name) => { sfx.src = `../../assets/sounds/${name}.wav`; sfx.currentTime = 0; sfx.play().catch(() => {}); });
+  </script>
+</body></html>
