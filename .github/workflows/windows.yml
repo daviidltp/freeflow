@@ -1,0 +1,73 @@
+name: Windows
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "windows/**"
+      - ".github/workflows/windows.yml"
+  push:
+    tags:
+      - "windows-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build installer
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: windows
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Stamp version from tag
+        if: startsWith(github.ref, 'refs/tags/windows-v')
+        shell: bash
+        run: npm version --no-git-tag-version "${GITHUB_REF_NAME#windows-v}"
+
+      - name: Build installer
+        run: npm run dist
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Upload installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: FreeFlow-Windows
+          path: windows/dist/FreeFlow-Setup-*.exe
+          if-no-files-found: error
+
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/windows-v')
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          name: FreeFlow para Windows ${{ github.ref_name }}
+          body: |
+            Instalador de FreeFlow para Windows 10 y 11 (64 bits).
+
+            Windows puede mostrar el aviso "Windows protegió tu equipo" porque el instalador no está firmado: pulsa **Más información → Ejecutar de todas formas**.
+          make_latest: false
+          files: |
+            windows/dist/FreeFlow-Setup-*.exe

@@ -28,6 +28,13 @@ FreeFlow is a free Mac dictation app inspired by [Wispr Flow](https://wisprflow.
 
 ## Instalación
 
+Elige tu sistema. Son dos apps distintas con las mismas funciones: la de Mac se compila en tu Mac y la de Windows se descarga como instalador.
+
+- [Instalar en macOS](#instalar-en-macos)
+- [Instalar en Windows](#instalar-en-windows)
+
+## Instalar en macOS
+
 Esta versión no está firmada ni notarizada por Apple (no hay cuenta de pago detrás), así que **no hay un `.dmg` que descargar**: la compilas en tu Mac con un solo comando y macOS no la bloquea.
 
 **Qué diferencia a este fork del original:** el vocabulario personalizado se envía también a Whisper y se aplican reemplazos fijos tras la limpieza, se restaura la capitalización de los términos cuando Whisper los grita en mayúsculas, hay icono en blanco y negro y las actualizaciones apuntan a este repo.
@@ -63,6 +70,17 @@ El script compila la app (un par de minutos la primera vez), la copia a `/Applic
 ### Modificarla
 
 Es código abierto (MIT). Haz tu propio fork, cámbialo (con Claude Code, Codex o a mano) y vuelve a ejecutar `./install.sh`. Más detalles en [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Instalar en Windows
+
+Windows 10 u 11 (64 bits). Aquí sí hay instalador que descargar.
+
+1. Ve a [Releases](https://github.com/daviidltp/freeflow/releases) y descarga `FreeFlow-Setup-<versión>.exe` de la última release cuyo nombre empiece por `windows-v`.
+2. Ejecútalo. Windows avisará de que no está firmado: pulsa **Más información → Ejecutar de todas formas**.
+3. Abre FreeFlow, pega tu API key de [Groq](https://console.groq.com/keys) y pulsa **Guardar y comprobar**.
+4. Mantén `Ctrl + Win` para hablar, o pulsa `Ctrl + Win + Shift` para empezar y parar. No hay tecla `Fn` en Windows, y los atajos se cambian en **Atajos**.
+
+Diferencias con el Mac, cómo compilarla tú mismo y más detalles: [windows/README.md](windows/README.md).
 
 ## Features
 

@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><title>FreeFlow</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:">
+<link rel="stylesheet" href="settings.css"></head>
+<body>
+<aside>
+  <div class="brand"><img src="../../assets/icon.png" alt=""><span>FreeFlow</span></div>
+  <nav id="nav">
+    <button data-page="general">General</button>
+    <button data-page="shortcuts">Atajos</button>
+    <button data-page="style">Estilo</button>
+    <button data-page="dictionary">Diccionario</button>
+    <button data-page="prompt">Prompt</button>
+    <button data-page="history">Historial</button>
+  </nav>
+  <div class="version" id="version"></div>
+</aside>
+<main>
+  <section id="page-general" class="page">
+    <h1>General</h1>
+    <div class="card">
+      <h2>API</h2>
+      <p class="hint">Usa una API key gratuita de <a href="#" data-link="https://console.groq.com/keys">Groq</a> o la de cualquier proveedor compatible con OpenAI.</p>
+      <label>API key<input id="apiKey" type="password" autocomplete="off" placeholder="gsk_…"></label>
+      <label>URL base<input id="baseURL" type="text" placeholder="https://api.groq.com/openai/v1"></label>
+      <details><summary>Transcripción con otro proveedor</summary>
+        <label>URL de transcripción<input id="transcriptionAPIURL" type="text" placeholder="Igual que la URL base"></label>
+        <label>API key de transcripción<input id="transcriptionAPIKey" type="password" autocomplete="off" placeholder="Igual que la API key"></label>
+      </details>
+      <div class="row"><button class="primary" id="saveKey">Guardar y comprobar</button><span id="keyStatus" class="status"></span></div>
+    </div>
+    <div class="card">
+      <h2>Modelos</h2>
+      <label>Transcripción<input id="transcriptionModel" list="tModels"></label><datalist id="tModels"></datalist>
+      <label>Limpieza de texto<input id="llmModel" list="lModels"></label><datalist id="lModels"></datalist>
+      <label>Modelo de respaldo (opcional)<input id="fallbackModel" list="lModels" placeholder="Automático"></label>
+      <label>Idioma que hablas<input id="language" placeholder="Vacío = detectar solo. Código ISO, por ejemplo es o en"></label>
+      <label>Idioma del texto final (traducir)<input id="outputLanguage" placeholder="Vacío = el mismo que hablas. Por ejemplo English"></label>
+    </div>
+    <div class="card">
+      <h2>Comportamiento</h2>
+      <label class="check"><input id="cleanupEnabled" type="checkbox"> Limpiar el texto con IA (quita muletillas, arregla puntuación)</label>
+      <label class="check"><input id="restoreClipboard" type="checkbox"> Devolver el portapapeles anterior tras pegar</label>
+      <label class="check"><input id="playSounds" type="checkbox"> Sonidos al empezar, parar y pegar</label>
+      <label class="check"><input id="launchAtLogin" type="checkbox"> Abrir FreeFlow al iniciar Windows</label>
+      <label class="check"><input id="editMode" type="checkbox"> Modo edición: si hay texto seleccionado, tu voz es una orden sobre ese texto</label>
+      <p class="hint">El modo edición copia la selección con Ctrl+C. No funciona en terminales.</p>
+      <label>Micrófono<select id="microphoneId"></select></label>
+    </div>
+  </section>
+
+  <section id="page-shortcuts" class="page">
+    <h1>Atajos</h1>
+    <div class="card">
+      <div class="shortcut"><div><h2>Mantener para hablar</h2><p class="hint">Mantén pulsado, habla y suelta para pegar.</p></div>
+        <button class="chip" data-shortcut="holdShortcut"></button></div>
+      <div class="shortcut"><div><h2>Alternar</h2><p class="hint">Púlsalo para empezar y otra vez para parar. Si lo extiende al de mantener, puedes empezar manteniendo y engancharlo sin cortar.</p></div>
+        <button class="chip" data-shortcut="toggleShortcut"></button></div>
+      <div class="shortcut"><div><h2>Pegar de nuevo</h2><p class="hint">Vuelve a pegar el último dictado.</p></div>
+        <button class="chip" data-shortcut="pasteAgainShortcut"></button></div>
+      <p class="hint">Pulsa un atajo y haz la combinación que quieras. Esc cancela. Clic derecho en un atajo lo desactiva.</p>
+      <div class="row"><button id="resetShortcuts">Restaurar atajos</button></div>
+    </div>
+  </section>
+
+  <section id="page-style" class="page">
+    <h1>Estilo</h1>
+    <p class="hint">FreeFlow detecta la app donde dictas y escribe con el estilo que elijas para ese tipo de app.</p>
+    <div id="groups"></div>
+  </section>
+
+  <section id="page-dictionary" class="page">
+    <h1>Diccionario</h1>
+    <div class="card">
+      <h2>Vocabulario</h2>
+      <p class="hint">Nombres, marcas y términos que deben escribirse tal cual. Uno por línea o separados por comas.</p>
+      <textarea id="vocabulary" rows="7" placeholder="Cutmax&#10;Budgy"></textarea>
+    </div>
+    <div class="card">
+      <h2>Reemplazos fijos</h2>
+      <p class="hint">Se aplican al final, sin distinguir mayúsculas. Una regla por línea con el formato <code>mal =&gt; bien</code>.</p>
+      <textarea id="replacements" rows="7" placeholder="cat max =&gt; Cutmax"></textarea>
+    </div>
+  </section>
+
+  <section id="page-prompt" class="page">
+    <h1>Prompt de limpieza</h1>
+    <div class="card">
+      <p class="hint">Instrucciones que recibe el modelo para limpiar tu dictado. Si lo dejas vacío se usa el de serie.</p>
+      <textarea id="customSystemPrompt" rows="18" class="mono"></textarea>
+      <div class="row"><button id="useDefaultPrompt">Cargar el de serie</button><button id="clearPrompt">Vaciar (usar el de serie)</button></div>
+    </div>
+  </section>
+
+  <section id="page-history" class="page">
+    <h1>Historial</h1>
+    <p class="hint">Se guarda solo en este ordenador. Máximo 100 dictados.</p>
+    <div class="row"><button id="clearHistory">Borrar historial</button></div>
+    <div id="historyList"></div>
+  </section>
+</main>
+<script src="settings.js"></script>
+</body></html>
