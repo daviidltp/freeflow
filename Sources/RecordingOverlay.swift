@@ -201,7 +201,9 @@ final class RecordingOverlayManager {
 
     func showTranscribing() {
         DispatchQueue.main.async {
-            self.lockedOverlayWidth = self.overlayWidth
+            // Al procesar, la isla se ajusta a su contenido (onda corta + spinner)
+            // en vez de conservar el largo que tenía grabando con botones y cronómetro.
+            self.lockedOverlayWidth = nil
             self.overlayState.phase = .transcribing
             self.showOverlayPanel(animated: true)
         }
@@ -487,7 +489,10 @@ final class RecordingOverlayManager {
             return min(460, max(180, CGFloat(msg.count) * 6.8 + 56))
         case .updateAvailable:
             return 168
-        case .idle, .initializing, .recording, .transcribing:
+        case .transcribing:
+            // 16 barras de la onda + hueco de 10 + spinner de 14, con 15 de margen a cada lado.
+            return 15 * 2 + 16 * (WisprIsland.barWidth + WisprIsland.barSpacing) - WisprIsland.barSpacing + 10 + 14
+        case .idle, .initializing, .recording:
             var width: CGFloat = 15 * 2 + CGFloat(WisprIsland.barCount) * (WisprIsland.barWidth + WisprIsland.barSpacing) - WisprIsland.barSpacing
             if overlayState.phase == .recording {
                 if overlayState.recordingTriggerMode == .toggle {
