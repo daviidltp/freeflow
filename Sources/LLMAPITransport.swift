@@ -1,14 +1,22 @@
 import Foundation
 
 enum LLMAPITransport {
+    /// Sesión compartida entre dictados: reutiliza la conexión TLS/HTTP con el
+    /// proveedor en vez de abrir una nueva por petición. Cada petición sigue
+    /// llevando su propio timeout en el URLRequest, y quien llama ya corta por
+    /// tiempo total con su propia carrera de timeout.
+    private static let sharedSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.urlCache = nil
+        configuration.timeoutIntervalForRequest = 300
+        return URLSession(configuration: configuration)
+    }()
+
     private static func makeEphemeralSession(timeout: TimeInterval) -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.urlCache = nil
-        // URLSession's resource timeout is session-scoped, while each caller
-        // already puts its configured timeout on the URLRequest. Keep both
-        // session timers aligned with that request instead of applying one
-        // global timeout to every provider and operation.
         configuration.timeoutIntervalForRequest = timeout
         configuration.timeoutIntervalForResource = timeout
         return URLSession(configuration: configuration)
@@ -22,21 +30,54 @@ enum LLMAPITransport {
         return requestTimeout
     }
 
+    /// Una conexión reutilizada que el servidor ya cerró falla con
+    /// `networkConnectionLost`. En ese caso se repite una vez con una sesión
+    /// nueva, que es lo que se hacía siempre antes.
+    static func isStaleConnectionError(_ error: Error) -> Bool {
+        (error as? URLError)?.code == .networkConnectionLost
+    }
+
+    private static func withFreshSessionOnStaleConnection<T>(
+        timeout: TimeInterval,
+        _ operation: (URLSession) async throws -> T
+    ) async throws -> T {
+        do {
+            return try await operation(sharedSession)
+        } catch where isStaleConnectionError(error) {
+            let session = makeEphemeralSession(timeout: timeout)
+            defer { session.finishTasksAndInvalidate() }
+            return try await operation(session)
+        }
+    }
+
+    /// Abre la conexión con el proveedor mientras el usuario habla, para que la
+    /// subida del audio no pague DNS + TCP + TLS al soltar la tecla. Es un HEAD
+    /// sin credenciales: no consume cuota del proveedor.
+    static func prewarm(baseURL: String) {
+        guard let url = URL(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http",
+              url.host != nil else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "HEAD"
+        request.timeoutInterval = 5
+        sharedSession.dataTask(with: request).resume()
+    }
+
     static func data(
         for request: URLRequest
     ) async throws -> (Data, URLResponse) {
-        let session = makeEphemeralSession(timeout: timeout(for: request))
-        defer { session.finishTasksAndInvalidate() }
-        return try await data(for: request, using: session)
+        try await withFreshSessionOnStaleConnection(timeout: timeout(for: request)) { session in
+            try await data(for: request, using: session)
+        }
     }
 
     static func data(
         for request: URLRequest,
         cache: TemperatureCapabilityCache
     ) async throws -> (Data, URLResponse) {
-        let session = makeEphemeralSession(timeout: timeout(for: request))
-        defer { session.finishTasksAndInvalidate() }
-        return try await data(for: request, using: session, cache: cache)
+        try await withFreshSessionOnStaleConnection(timeout: timeout(for: request)) { session in
+            try await data(for: request, using: session, cache: cache)
+        }
     }
 
     static func data(
@@ -118,9 +159,8 @@ enum LLMAPITransport {
         for request: URLRequest,
         from bodyData: Data
     ) async throws -> (Data, URLResponse) {
-        // Fresh session per upload — no poisoned connection re-use.
-        let session = makeEphemeralSession(timeout: timeout(for: request))
-        defer { session.finishTasksAndInvalidate() }
-        return try await session.upload(for: request, from: bodyData)
+        try await withFreshSessionOnStaleConnection(timeout: timeout(for: request)) { session in
+            try await session.upload(for: request, from: bodyData)
+        }
     }
 }

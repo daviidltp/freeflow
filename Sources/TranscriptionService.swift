@@ -58,7 +58,7 @@ class TranscriptionService {
 
     private let apiKey: String
     private let baseURL: URL
-    private let transcriptionModel: String
+    let transcriptionModel: String
     private let language: String?
     private let vocabularyPrompt: String?
     private var transcriptionResponseFormat: String {
