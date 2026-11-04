@@ -10,29 +10,8 @@ enum TranscriptTextCoreTests {
         testPostProcessedTranscriptSanitization()
         testModeSpecificSanitization()
         testInstructionExecutionGuard()
-        testShortTranscriptCleanupPolicy()
     }
 
-    private static func testShortTranscriptCleanupPolicy() {
-        let policy = ShortTranscriptCleanupPolicy.self
-        // Frases cortas y limpias: se pegan sin LLM.
-        TestSupport.expectEqual(policy.cleanedWithoutLLM("Vale, perfecto.", style: .formal, hasCustomStyleInstruction: false), "Vale, perfecto.")
-        TestSupport.expectEqual(policy.cleanedWithoutLLM("¿Lo miras mañana?", style: .casual, hasCustomStyleInstruction: false), "Lo miras mañana?")
-        TestSupport.expectEqual(policy.cleanedWithoutLLM("Mañana lo miro.", style: .casual, hasCustomStyleInstruction: false), "Mañana lo miro")
-        TestSupport.expectEqual(policy.cleanedWithoutLLM("Espera...", style: .casual, hasCustomStyleInstruction: false), "Espera...")
-        // Estilos que el LLM debe aplicar.
-        TestSupport.expectEqual(policy.cleanedWithoutLLM("Vale, perfecto.", style: .veryCasual, hasCustomStyleInstruction: false), nil)
-        TestSupport.expectEqual(policy.cleanedWithoutLLM("Vale, perfecto.", style: .excited, hasCustomStyleInstruction: false), nil)
-        TestSupport.expectEqual(policy.cleanedWithoutLLM("Vale, perfecto.", style: .casual, hasCustomStyleInstruction: true), nil)
-        // Señales que necesitan limpieza.
-        TestSupport.expectEqual(policy.canSkipCleanup("Compra plátanos, no, aceite."), false)
-        TestSupport.expectEqual(policy.canSkipCleanup("Eh, vale."), false)
-        TestSupport.expectEqual(policy.canSkipCleanup("Hola coma Dana."), false)
-        TestSupport.expectEqual(policy.canSkipCleanup("vale perfecto"), false)
-        TestSupport.expectEqual(policy.canSkipCleanup("Esto tiene más de cuatro palabras."), false)
-        TestSupport.expectEqual(policy.canSkipCleanup("   "), false)
-        TestSupport.expectEqual(policy.canSkipCleanup("Sí."), true)
-    }
 
     private static func testJSONTranscriptParsing() {
         let data = jsonData(["text": "Synthetic transcript."])

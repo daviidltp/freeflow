@@ -2597,7 +2597,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
         case postProcessingSucceeded
         case postProcessingFailedFallback
         case preservedExactWording
-        case skippedCleanupForShortTranscript
         case preservedExactWordingTranslated
         case preservedExactWordingTranslationFailedFallback
         case commandModeSucceeded(invocation: CommandInvocation)
@@ -2617,8 +2616,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     : "Post-processing failed, using raw transcript"
             case .preservedExactWording:
                 return "Preserved exact wording, skipped post-processing"
-            case .skippedCleanupForShortTranscript:
-                return "Short transcript already clean, skipped post-processing"
             case .preservedExactWordingTranslated:
                 return "Preserved exact wording, translated to output language"
             case .preservedExactWordingTranslationFailedFallback:
@@ -2699,32 +2696,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
             }
         }
 
-        let styleInstruction = WritingStyleStore.shared.instruction(
-            appName: context.appName,
-            bundleIdentifier: context.bundleIdentifier,
-            windowTitle: context.windowTitle
-        )
-
-        // Frases cortas que Whisper ya devuelve limpias: no merece la pena esperar al LLM.
-        // La traducción y los estilos que no se pueden reproducir a mano siguen yendo al LLM.
-        if outputLanguage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let styleStore = WritingStyleStore.shared
-            let style = styleStore.style(for: styleStore.group(
-                appName: context.appName,
-                bundleIdentifier: context.bundleIdentifier,
-                windowTitle: context.windowTitle
-            ))
-            let hasCustomStyleInstruction = !styleStore.customInstruction(for: style)
-                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            if let quickText = ShortTranscriptCleanupPolicy.cleanedWithoutLLM(
-                trimmedRawTranscript,
-                style: style,
-                hasCustomStyleInstruction: hasCustomStyleInstruction
-            ) {
-                return (VocabularyReplacements.applyStored(quickText), .skippedCleanupForShortTranscript, "")
-            }
-        }
-
         do {
             let result = try await postProcessingService.postProcess(
                 transcript: trimmedRawTranscript,
@@ -2733,7 +2704,11 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 customSystemPrompt: customSystemPrompt,
                 outputLanguage: outputLanguage,
                 dictationLanguage: dictationLanguage,
-                styleInstruction: styleInstruction
+                styleInstruction: WritingStyleStore.shared.instruction(
+                    appName: context.appName,
+                    bundleIdentifier: context.bundleIdentifier,
+                    windowTitle: context.windowTitle
+                )
             )
             return (VocabularyReplacements.applyStored(result.transcript), .postProcessingSucceeded, result.prompt)
         } catch {
