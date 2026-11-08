@@ -44,7 +44,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .snippets: return "Snippets"
         case .style: return "Style"
         case .insights: return "Insights"
-        case .settings: return "Settings"
+        case .settings: return "Ajustes"
         case .debug: return "Debug"
         }
     }
@@ -499,6 +499,18 @@ final class AppState: ObservableObject, @unchecked Sendable {
     /// OpenAI Realtime WebSocket. Reduces wall-clock latency between "stop"
     /// and text-ready because most of the transcription work happens while
     /// the user is still speaking.
+    /// Dónde se transcribe: en la nube o en el Mac con Parakeet.
+    @Published var transcriptionEngine: TranscriptionEngine = TranscriptionEngine.current {
+        didSet {
+            TranscriptionEngine.current = transcriptionEngine
+            if transcriptionEngine == .parakeet {
+                LocalParakeetEngine.shared.warmUp()
+            } else {
+                LocalParakeetEngine.shared.stop()
+            }
+        }
+    }
+
     @Published var realtimeStreamingEnabled: Bool {
         didSet {
             UserDefaults.standard.set(realtimeStreamingEnabled, forKey: realtimeStreamingEnabledStorageKey)
@@ -1137,7 +1149,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
             baseURL: resolvedTranscriptionBaseURL,
             transcriptionModel: transcriptionModel,
             language: resolvedTranscriptionLanguage,
-            vocabularyPrompt: VocabularyReplacements.transcriptionPrompt(fromVocabulary: customVocabulary)
+            vocabularyPrompt: VocabularyReplacements.transcriptionPrompt(fromVocabulary: customVocabulary),
+            engine: transcriptionEngine
         )
     }
 
@@ -3109,7 +3122,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
     }
 
     private func startRealtimeStreamingIfEnabled() {
-        guard realtimeStreamingEnabled else { return }
+        // La transcripción en tiempo real es solo para la nube.
+        guard realtimeStreamingEnabled, transcriptionEngine == .cloud else { return }
         let trimmedBase = resolvedTranscriptionBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedBase.isEmpty else {
             os_log(.info, log: recordingLog, "realtime streaming requested but base URL is empty — skipping")

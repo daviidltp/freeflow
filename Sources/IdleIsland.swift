@@ -3,7 +3,7 @@ import AppKit
 
 /// Mini-isla en reposo: una barrita en el borde de la pantalla que, al pasar el ratón, se
 /// convierte en un botón de micrófono con la etiqueta "Dictate <atajo>". Se puede arrastrar
-/// a uno de tres sitios: abajo en el centro, o a media altura en el borde izquierdo o derecho.
+/// a uno de cuatro sitios: arriba o abajo en el centro, o a media altura en el borde izquierdo o derecho.
 enum IdleIslandPreference {
     static let storageKey = "show_idle_island"
 
@@ -14,6 +14,7 @@ enum IdleIslandPreference {
 
 enum IslandAnchor: String, CaseIterable {
     case bottom
+    case top
     case left
     case right
 
@@ -24,10 +25,10 @@ enum IslandAnchor: String, CaseIterable {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: storageKey) }
     }
 
-    var isVertical: Bool { self != .bottom }
+    var isVertical: Bool { self == .left || self == .right }
 }
 
-/// Capa que oscurece la pantalla mientras se arrastra la isla y marca los tres huecos donde encaja.
+/// Capa que oscurece la pantalla mientras se arrastra la isla y marca los cuatro huecos donde encaja.
 struct IslandDropTargetsView: View {
     let screenSize: CGSize
     let highlighted: IslandAnchor?
@@ -38,6 +39,10 @@ struct IslandDropTargetsView: View {
             slot(.bottom)
                 .frame(width: 90, height: 62)
                 .position(x: screenSize.width / 2, y: screenSize.height - 40)
+            // Arriba, justo bajo la barra de menús (unos 24 pt en pantallas sin notch).
+            slot(.top)
+                .frame(width: 90, height: 62)
+                .position(x: screenSize.width / 2, y: 24 + 40)
             slot(.left)
                 .frame(width: 58, height: 84)
                 .position(x: 36, y: screenSize.height / 2)

@@ -21,6 +21,10 @@ final class RecordingOverlayState: ObservableObject {
     /// Tamaño de la forma negra/gris dentro del panel; el panel se anima hacia el mismo tamaño.
     @Published var shapeSize = CGSize(width: 38, height: 6)
     @Published var shortcutLabel = "fn"
+    /// Simulación del indicador de puntos; vive aquí para que siga entre grabar y procesar.
+    let dotScope = DotScopeSimulation()
+    /// La transcripción ha terminado y se está reproduciendo la animación de cierre.
+    @Published var isFinishing = false
 }
 
 enum OverlayPhase {
@@ -52,11 +56,13 @@ enum WisprIsland {
     static let barCount = 22
     static let barWidth: CGFloat = 2
     static let barSpacing: CGFloat = 2
-    static let maxBarHeight: CGFloat = 20
+    static let maxBarHeight: CGFloat = 16
     static let minBarHeight: CGFloat = 2
     static let bottomMargin: CGFloat = 10
     static let buttonSize: CGFloat = 30
     static let border = WisprPalette.vast900
+    /// Azul de la onda mientras se procesa (el de Hex al procesar).
+    static let processingBlue = Color(.sRGB, red: 0.56, green: 0.72, blue: 1.0, opacity: 1)
 }
 
 // MARK: - Manager
@@ -69,6 +75,7 @@ final class RecordingOverlayManager {
     private var lockedOverlayWidth: CGFloat?
     private var dropTargetsPanel: NSPanel?
     private var dropHighlight: IslandAnchor?
+    private var finishWork: DispatchWorkItem?
     private var screenObserver: NSObjectProtocol?
     private var mouseMonitors: [Any] = []
     private var hoverFallbackTimer: Timer?
@@ -123,6 +130,7 @@ final class RecordingOverlayManager {
 
     func showInitializing(mode: RecordingTriggerMode = .hold, isCommandMode: Bool = false) {
         DispatchQueue.main.async {
+            self.cancelFinishing()
             self.lockedOverlayWidth = nil
             self.overlayState.recordingTriggerMode = mode
             self.overlayState.isCommandMode = isCommandMode
@@ -140,6 +148,7 @@ final class RecordingOverlayManager {
         showsRecordingTimer: Bool
     ) {
         DispatchQueue.main.async {
+            self.cancelFinishing()
             self.lockedOverlayWidth = nil
             self.overlayState.recordingTriggerMode = mode
             self.overlayState.isCommandMode = isCommandMode
@@ -157,10 +166,12 @@ final class RecordingOverlayManager {
         showsRecordingTimer: Bool
     ) {
         DispatchQueue.main.async {
+            self.cancelFinishing()
             self.lockedOverlayWidth = nil
             self.overlayState.recordingTriggerMode = mode
             self.overlayState.isCommandMode = isCommandMode
             self.beginRecordingTimer(startedAt: startedAt, showsRecordingTimer: showsRecordingTimer)
+            self.overlayState.dotScope.restart()
             self.overlayState.phase = .recording
             self.applyLayout(animated: true)
         }
@@ -172,6 +183,7 @@ final class RecordingOverlayManager {
     }
 
     private func resetLevels() {
+        overlayState.dotScope.restart()
         overlayState.audioLevel = 0
         overlayState.levelHistory = Array(repeating: 0, count: WisprIsland.barCount)
     }
@@ -201,6 +213,7 @@ final class RecordingOverlayManager {
 
     func showTranscribing() {
         DispatchQueue.main.async {
+            self.cancelFinishing()
             // Al procesar, la isla se ajusta a su contenido (onda corta + spinner)
             // en vez de conservar el largo que tenía grabando con botones y cronómetro.
             self.lockedOverlayWidth = nil
@@ -211,6 +224,7 @@ final class RecordingOverlayManager {
 
     func showFailureIndicator() {
         DispatchQueue.main.async {
+            self.cancelFinishing()
             self.lockedOverlayWidth = nil
             self.overlayState.phase = .feedback
             self.showOverlayPanel(animated: true)
@@ -233,6 +247,7 @@ final class RecordingOverlayManager {
             return String(message[..<cutoff]) + "…"
         }()
         DispatchQueue.main.async { [self] in
+            self.cancelFinishing()
             let toastID = UUID()
             self.overlayState.errorMessage = truncated
             self.overlayState.toastID = toastID
@@ -255,6 +270,7 @@ final class RecordingOverlayManager {
 
     func showUpdateAvailable(version: String) {
         DispatchQueue.main.async {
+            self.cancelFinishing()
             self.lockedOverlayWidth = nil
             self.overlayState.isCommandMode = false
             self.overlayState.updateVersion = version
@@ -263,10 +279,48 @@ final class RecordingOverlayManager {
         }
     }
 
-    func dismiss() {
+    /// Recoloca la isla tras cambiar su posición desde los ajustes.
+    func applyAnchorChange() {
         DispatchQueue.main.async {
+            guard self.panel != nil else { return }
+            self.applyLayout(animated: true)
+        }
+    }
+
+    func dismiss() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            // Si estaba procesando, primero la animación de terminar (como en Hex) y luego se cierra.
+            if self.overlayState.phase == .transcribing, !self.overlayState.isFinishing,
+               IslandChipStyle.current == .dots {
+                self.overlayState.isFinishing = true
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self else { return }
+                    self.finishWork = nil
+                    self.endFinishing()
+                    self.dismissAll()
+                }
+                self.finishWork = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + dotScopeDoneDuration, execute: work)
+                return
+            }
+            guard !self.overlayState.isFinishing else { return }
             self.dismissAll()
         }
+    }
+
+    /// Corta la animación de terminar si empieza otra cosa (por ejemplo, otro dictado).
+    private func cancelFinishing() {
+        finishWork?.cancel()
+        finishWork = nil
+        endFinishing()
+    }
+
+    private func endFinishing() {
+        guard overlayState.isFinishing else { return }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { overlayState.isFinishing = false }
     }
 
     /// Muestra u oculta la barrita en reposo según el ajuste. No toca un dictado en curso.
@@ -402,6 +456,8 @@ final class RecordingOverlayManager {
         switch anchor {
         case .bottom:
             return NSRect(x: screen.frame.midX - size.width / 2, y: visible.minY + inset, width: size.width, height: size.height)
+        case .top:
+            return NSRect(x: screen.frame.midX - size.width / 2, y: visible.maxY - inset - size.height, width: size.width, height: size.height)
         case .left:
             return NSRect(x: visible.minX + inset, y: visible.midY - size.height / 2, width: size.width, height: size.height)
         case .right:
@@ -435,6 +491,8 @@ final class RecordingOverlayManager {
         switch IslandAnchor.current {
         case .bottom:
             return NSRect(x: stage.midX - shape.width / 2, y: stage.minY, width: shape.width, height: shape.height)
+        case .top:
+            return NSRect(x: stage.midX - shape.width / 2, y: stage.maxY - shape.height, width: shape.width, height: shape.height)
         case .left:
             return NSRect(x: stage.minX, y: stage.midY - shape.height / 2, width: shape.width, height: shape.height)
         case .right:
@@ -473,8 +531,12 @@ final class RecordingOverlayManager {
     }
 
     private var overlayHeight: CGFloat {
-        let showsButtons = overlayState.phase == .recording && overlayState.recordingTriggerMode == .toggle
-        return showsButtons ? 40 : 34
+        switch overlayState.phase {
+        case .recording, .transcribing:
+            // El clásico va algo más bajo que el resto de avisos de la isla.
+            return IslandChipStyle.current == .dots ? CGFloat(DotScopeTuning.height) : 30
+        default: return 34
+        }
     }
 
     private var overlayWidth: CGFloat {
@@ -490,16 +552,25 @@ final class RecordingOverlayManager {
         case .updateAvailable:
             return 168
         case .transcribing:
-            // 16 barras de la onda + hueco de 10 + spinner de 14, con 15 de margen a cada lado.
-            return 15 * 2 + 16 * (WisprIsland.barWidth + WisprIsland.barSpacing) - WisprIsland.barSpacing + 10 + 14
+            if IslandChipStyle.current == .classic {
+                // 16 barras de la onda, con 15 de margen a cada lado (sin indicador de carga).
+                return 15 * 2 + 16 * (WisprIsland.barWidth + WisprIsland.barSpacing) - WisprIsland.barSpacing
+            }
+            // El marco no cambia: es la propia placa de puntos la que se estrecha al procesar.
+            return CGFloat(DotScopeTuning.width)
         case .idle, .initializing, .recording:
             var width: CGFloat = 15 * 2 + CGFloat(WisprIsland.barCount) * (WisprIsland.barWidth + WisprIsland.barSpacing) - WisprIsland.barSpacing
-            if overlayState.phase == .recording {
-                if overlayState.recordingTriggerMode == .toggle {
-                    width += (WisprIsland.buttonSize + 8) * 2 - 16
-                }
+            if overlayState.phase == .recording, IslandChipStyle.current == .classic {
+                // Sin botones de cancelar y parar: solo la onda, el cronómetro y el lápiz.
                 if overlayState.showsRecordingTimer { width += 40 }
                 if overlayState.isCommandMode { width += 22 }
+            } else if overlayState.phase == .recording {
+                // La isla es la placa de puntos; el cronómetro y el lápiz se añaden a su lado.
+                width = CGFloat(DotScopeTuning.width)
+                if overlayState.showsRecordingTimer || overlayState.isCommandMode { width += 20 + 6 }
+                if overlayState.showsRecordingTimer { width += 34 }
+                if overlayState.isCommandMode { width += 12 }
+                if overlayState.showsRecordingTimer && overlayState.isCommandMode { width += 8 }
             }
             return width
         }
@@ -580,6 +651,7 @@ final class RecordingOverlayManager {
         let visible = screen.visibleFrame
         let targets: [(IslandAnchor, NSPoint)] = [
             (.bottom, NSPoint(x: screen.frame.midX, y: visible.minY + 30)),
+            (.top, NSPoint(x: screen.frame.midX, y: visible.maxY - 30)),
             (.left, NSPoint(x: visible.minX + 30, y: visible.midY)),
             (.right, NSPoint(x: visible.maxX - 30, y: visible.midY)),
         ]
@@ -665,11 +737,26 @@ struct WisprIslandView: View {
     let onDragEnded: () -> Void
 
     private let spring = Animation.spring(response: 0.3, dampingFraction: 0.82)
+    @Environment(\.colorScheme) private var systemScheme
+    @AppStorage(IslandThemePreference.storageKey) private var themeRaw = IslandThemePreference.system.rawValue
+
+    private var isDarkChip: Bool {
+        (IslandThemePreference(rawValue: themeRaw) ?? .system).isDark(system: systemScheme)
+    }
+
+    private var chipPalette: DotScopePalette { DotScopePalette.forDark(isDarkChip) }
 
     private var isIdle: Bool { state.phase == .idle }
 
-    private var showsButtons: Bool {
-        state.phase == .recording && state.recordingTriggerMode == .toggle
+    /// Sin botones de cancelar y parar: el indicador de puntos va solo.
+    private var showsButtons: Bool { false }
+
+    /// Grabando o procesando, la isla es justo la placa de puntos, sin margen.
+    @AppStorage(IslandChipStyle.storageKey) private var chipStyleRaw = IslandChipStyle.classic.rawValue
+
+    private var showsDotScope: Bool {
+        (IslandChipStyle(rawValue: chipStyleRaw) ?? .classic) == .dots
+            && (state.phase == .recording || state.phase == .transcribing)
     }
 
     /// Dónde se ancla la forma dentro del panel: pegada al borde del anclaje, para que crezca
@@ -678,6 +765,7 @@ struct WisprIslandView: View {
         if state.isDragging { return .center }
         switch state.anchor {
         case .bottom: return .bottom
+        case .top: return .top
         case .left: return .leading
         case .right: return .trailing
         }
@@ -717,15 +805,63 @@ struct WisprIslandView: View {
         .animation(.easeInOut(duration: 0.2), value: state.idleHover)
     }
 
+    @ViewBuilder
     private var shape: some View {
-        ZStack {
-            Capsule(style: .continuous)
-                .fill(isCollapsedBar ? WisprPalette.vast910 : (isIdle && state.idleHover ? WisprPalette.vast925 : Color.black))
-            Capsule(style: .continuous)
-                .strokeBorder(isCollapsedBar || (isIdle && state.idleHover) ? WisprPalette.vast700.opacity(0.7) : WisprIsland.border, lineWidth: 1)
-            content
-                .padding(isVerticalLayout ? .vertical : .horizontal, showsButtons ? 5 : (isIdle ? 0 : 15))
+        if showsDotScope {
+            dotScopeChip
+        } else {
+            ZStack {
+                Capsule(style: .continuous)
+                    .fill(isCollapsedBar ? WisprPalette.vast910 : (isIdle && state.idleHover ? WisprPalette.vast925 : Color.black))
+                Capsule(style: .continuous)
+                    .strokeBorder(isCollapsedBar || (isIdle && state.idleHover) ? WisprPalette.vast700.opacity(0.7) : WisprIsland.border, lineWidth: 1)
+                content
+                    .padding(isVerticalLayout ? .vertical : .horizontal, isIdle ? 0 : 15)
+                    .transition(.opacity)
+            }
+        }
+    }
+
+    private var dotScopeStage: DotScopeStage {
+        switch state.phase {
+        case .recording: return .recording
+        default: return state.isFinishing ? .done : .processing
+        }
+    }
+
+    private var showsRecordingExtras: Bool {
+        state.phase == .recording && (state.isCommandMode || (state.showsRecordingTimer && state.recordingStartedAt != nil))
+    }
+
+    /// Grabando y procesando es una sola vista: la misma simulación pasa de un estado a otro sin
+    /// cortes, y la propia placa se estrecha al procesar y se recoge al terminar, como en Hex.
+    private var dotScopeChip: some View {
+        IslandStack(isVertical: isVerticalLayout, spacing: 6) {
+            if showsRecordingExtras {
+                HStack(spacing: 8) {
+                    if state.isCommandMode {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    if state.showsRecordingTimer, let start = state.recordingStartedAt {
+                        IslandElapsedTimeView(start: start)
+                    }
+                }
+                .foregroundStyle(isDarkChip ? Color.white.opacity(0.9) : Color.black.opacity(0.75))
+                .padding(.horizontal, 10)
+                .frame(height: CGFloat(DotScopeTuning.height))
+                .background(Capsule(style: .continuous).fill(chipPalette.plate))
+                .overlay(Capsule(style: .continuous).strokeBorder(chipPalette.rim, lineWidth: 1))
                 .transition(.opacity)
+            }
+            DotScopeView(
+                simulation: state.dotScope,
+                stage: dotScopeStage,
+                level: state.phase == .recording ? state.audioLevel : 0,
+                vertical: isVerticalLayout,
+                dark: isDarkChip
+            )
+            .sized()
         }
     }
 
@@ -733,6 +869,7 @@ struct WisprIslandView: View {
     private var tooltipAlignment: Alignment {
         switch state.anchor {
         case .bottom: return .top
+        case .top: return .bottom
         case .left: return .leading
         case .right: return .trailing
         }
@@ -742,6 +879,7 @@ struct WisprIslandView: View {
     private var tooltipOffset: CGSize {
         switch state.anchor {
         case .bottom: return CGSize(width: 0, height: -(34 + 8))
+        case .top: return CGSize(width: 0, height: 34 + 8)
         case .left: return CGSize(width: state.shapeSize.width + 10, height: 0)
         case .right: return CGSize(width: -(state.shapeSize.width + 10), height: 0)
         }
@@ -793,16 +931,11 @@ struct WisprIslandView: View {
         case .initializing:
             IslandDotsView(isVertical: isVerticalLayout)
         case .transcribing:
-            IslandStack(isVertical: isVerticalLayout, spacing: 10) {
-                IslandWaveformView(levels: Array(state.levelHistory.suffix(16)), isProcessing: true, isVertical: isVerticalLayout)
-                IslandSpinner()
-            }
+            // Estilo clásico (el de puntos se dibuja en dotScopeChip).
+            // Procesando: la onda congelada en azul con su ola de brillo, sin indicador de carga.
+            IslandWaveformView(levels: Array(state.levelHistory.suffix(16)), isProcessing: true, isVertical: isVerticalLayout)
         case .recording:
             IslandStack(isVertical: isVerticalLayout, spacing: 8) {
-                if showsButtons {
-                    IslandCircleButton(systemName: "xmark", action: onCancelButtonPressed)
-                        .accessibilityLabel("Cancel dictation")
-                }
                 if state.isCommandMode {
                     Image(systemName: "pencil")
                         .font(.system(size: 11, weight: .semibold))
@@ -810,13 +943,10 @@ struct WisprIslandView: View {
                 }
                 if state.showsRecordingTimer, let start = state.recordingStartedAt {
                     IslandElapsedTimeView(start: start)
+                        .foregroundStyle(.white.opacity(0.9))
                 }
                 IslandWaveformView(levels: state.levelHistory, isVertical: isVerticalLayout)
                     .frame(maxWidth: isVerticalLayout ? nil : .infinity, maxHeight: isVerticalLayout ? .infinity : nil)
-                if showsButtons {
-                    IslandCircleButton(systemName: "stop.fill", action: onStopButtonPressed)
-                        .accessibilityLabel("Stop dictation")
-                }
             }
         }
     }
@@ -869,7 +999,7 @@ struct IslandWaveformView: View {
             IslandStack(isVertical: isVertical, spacing: WisprIsland.barSpacing) {
                 ForEach(Array(levels.enumerated()), id: \.offset) { index, level in
                     RoundedRectangle(cornerRadius: 1, style: .continuous)
-                        .fill(Color.white.opacity(opacity(index, time: time)))
+                        .fill((isProcessing ? WisprIsland.processingBlue : Color.white).opacity(opacity(index, time: time)))
                         .frame(
                             width: isVertical ? height(for: level) : WisprIsland.barWidth,
                             height: isVertical ? WisprIsland.barWidth : height(for: level)
@@ -954,7 +1084,6 @@ private struct IslandElapsedTimeView: View {
             let seconds = max(0, start.duration(to: .now).components.seconds)
             Text(String(format: "%lld:%02lld", seconds / 60, seconds % 60))
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.9))
                 .fixedSize()
                 .accessibilityLabel("Recording duration")
                 .accessibilityValue("\(seconds / 60) minutes, \(seconds % 60) seconds")
