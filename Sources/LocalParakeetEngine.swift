@@ -84,6 +84,21 @@ final class LocalParakeetEngine: ObservableObject, @unchecked Sendable {
         queue.async { self.startIfNeeded() }
     }
 
+    /// Despierta el chip que ejecuta Parakeet con un segundo de silencio. Se llama al empezar a
+    /// grabar: si lleva un rato sin usarse, el Mac lo pone en reposo y el primer dictado tarda
+    /// unos 200 ms más. Si el modelo aún no está cargado, lo carga.
+    func prewarm() {
+        queue.async {
+            self.startIfNeeded()
+            guard self.state == .ready, let input = self.input else { return }
+            let id = self.nextID
+            self.nextID += 1
+            guard var data = try? JSONSerialization.data(withJSONObject: ["id": id, "warm": true]) else { return }
+            data.append(0x0A)
+            input.write(data)
+        }
+    }
+
     /// Cierra el ayudante y libera la memoria del modelo.
     func stop() {
         queue.async {

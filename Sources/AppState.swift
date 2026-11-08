@@ -2413,6 +2413,10 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
 
         startRealtimeStreamingIfEnabled()
+        if transcriptionEngine == .parakeet {
+            // Despierta Parakeet mientras hablas para que al terminar responda enseguida.
+            LocalParakeetEngine.shared.prewarm()
+        }
 
         // Start engine on background thread so UI isn't blocked
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in

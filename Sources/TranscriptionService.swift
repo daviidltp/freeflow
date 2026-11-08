@@ -173,10 +173,41 @@ class TranscriptionService {
 
     // Send audio file for transcription and return text
     private func transcribeAudio(fileURL: URL) async throws -> String {
-        return try await transcribeAudioWithURLSession(fileURL: fileURL)
+        let text = try await transcribeAudioWithURLSession(fileURL: fileURL, vocabularyPrompt: vocabularyPrompt)
+        // Whisper a veces repite la pista de vocabulario ("Glosario: Claude, Codex…") en vez de
+        // transcribir. Si pasa, se vuelve a pedir sin la pista.
+        if let vocabularyPrompt, Self.looksLikePromptEcho(text, prompt: vocabularyPrompt) {
+            os_log(.info, log: transcriptionLog, "transcript looks like an echo of the vocabulary prompt; retrying without it")
+            return try await transcribeAudioWithURLSession(fileURL: fileURL, vocabularyPrompt: nil)
+        }
+        return text
     }
 
-    private func transcribeAudioWithURLSession(fileURL: URL) async throws -> String {
+    /// Si `text` es la pista de vocabulario repetida: menciona "Glosario" o casi todas sus
+    /// palabras son términos del vocabulario (con alguna letra cambiada, como "Codax").
+    static func looksLikePromptEcho(_ text: String, prompt: String) -> Bool {
+        func words(_ value: String) -> [String] {
+            value
+                .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+                .components(separatedBy: CharacterSet.alphanumerics.inverted)
+                .filter { !$0.isEmpty }
+        }
+        let spoken = words(text)
+        guard !spoken.isEmpty else { return false }
+        if spoken.contains("glosario") || spoken.contains("glossary") { return true }
+        let terms = Set(words(prompt))
+        let fillers: Set<String> = ["y", "e", "o", "and", "or", "de", "la", "el"]
+        let content = spoken.filter { !fillers.contains($0) }
+        guard content.count >= 2 else { return false }
+        let matches = content.filter { word in
+            terms.contains(word) || terms.contains { term in
+                term.count >= 4 && word.count == term.count && zip(term, word).filter { $0 != $1 }.count <= 1
+            }
+        }
+        return Double(matches.count) / Double(content.count) >= 0.75
+    }
+
+    private func transcribeAudioWithURLSession(fileURL: URL, vocabularyPrompt: String?) async throws -> String {
         let url = baseURL
             .appendingPathComponent("audio")
             .appendingPathComponent("transcriptions")

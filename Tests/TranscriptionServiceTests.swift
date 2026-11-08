@@ -11,6 +11,13 @@ private actor ValidationRequestRecorder {
 enum TranscriptionServiceTests {
     @MainActor
     static func run() async {
+        let prompt = "Glosario: Claude, Codex, Drive, bro, Railway, Superwall, Cutmax, Budgy."
+        TestSupport.expect(TranscriptionService.looksLikePromptEcho("Glosario, Codax, Codax, Dive, Codax, Dive, Codax.", prompt: prompt), "echo with Glosario")
+        TestSupport.expect(TranscriptionService.looksLikePromptEcho("Glosario y Puddy.", prompt: prompt), "short Glosario echo")
+        TestSupport.expect(TranscriptionService.looksLikePromptEcho("Codex, Drive, Railway.", prompt: prompt), "list of vocabulary terms")
+        TestSupport.expect(!TranscriptionService.looksLikePromptEcho("Abre Codex y mira el Drive de Cutmax, bro.", prompt: prompt), "normal sentence with terms")
+        TestSupport.expect(!TranscriptionService.looksLikePromptEcho("Hola.", prompt: prompt), "normal short dictation")
+        TestSupport.expect(!TranscriptionService.looksLikePromptEcho("Codex", prompt: prompt), "single term is not enough")
         let recorder = ValidationRequestRecorder()
         let savedCredential = "saved-main-credential"
         let savedBaseURL = "https://saved-provider.invalid/v1"
