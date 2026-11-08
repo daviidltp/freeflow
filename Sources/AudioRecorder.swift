@@ -102,6 +102,12 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
     /// to a realtime transcription socket. The recorder writes a normalized
     /// 16 kHz mono PCM16 WAV file independently for upload-based transcription.
     var onPCM16Samples: ((Data) -> Void)?
+    /// Recibe el RMS de cada bloque de audio en la cola de captura (para el indicador de puntos).
+    private let rmsHandlerLock = OSAllocatedUnfairLock<(@Sendable (Float) -> Void)?>(initialState: nil)
+
+    func setRMSHandler(_ handler: (@Sendable (Float) -> Void)?) {
+        rmsHandlerLock.withLock { $0 = handler }
+    }
     private let recordingConverterLock = OSAllocatedUnfairLock<AVAudioConverter?>(initialState: nil)
     private let pcm16ConverterLock = OSAllocatedUnfairLock<AVAudioConverter?>(initialState: nil)
     private let recordingTargetFormat: AVAudioFormat = {
@@ -887,6 +893,7 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
         }
 
         let rms = updateAudioLevel(from: sampleBuffer)
+        rmsHandlerLock.withLock { $0 }?(rms)
         if count <= Self.sampleRateLogLimit {
             let elapsed = (CFAbsoluteTimeGetCurrent() - recordingStartTime) * 1000
             os_log(.info, log: recordingLog, "buffer #%d at %.3fms, rms=%.6f", count, elapsed, rms)
