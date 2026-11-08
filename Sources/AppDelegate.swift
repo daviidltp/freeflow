@@ -13,6 +13,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         NetworkMonitor.shared.start()
         WisprFonts.registerIfNeeded()
+        if appState.transcriptionEngine == .parakeet {
+            // Carga Parakeet en segundo plano para que el primer dictado no espere.
+            LocalParakeetEngine.shared.warmUp()
+        }
         if appState.hasCompletedSetup {
             appState.overlayManager.refreshIdleIsland()
         }

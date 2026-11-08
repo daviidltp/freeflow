@@ -35,6 +35,7 @@ TEST_PRODUCTION_SOURCES = \
 	Sources/TranscriptTextCore.swift \
 	Sources/TemperatureCapabilityCache.swift \
 	Sources/TranscriptionService.swift \
+	Sources/LocalParakeetEngine.swift \
 	Sources/UpdateManager.swift \
 	Sources/ShortcutCore/DictationShortcutSessionController.swift \
 	Sources/ShortcutCore/ShortcutMatcher.swift \
@@ -43,6 +44,13 @@ TEST_SOURCES = $(shell find Tests -name '*.swift' -type f | LC_ALL=C sort)
 SHELL_SCRIPTS = $(shell find .github/scripts .agents/skills -name '*.sh' -type f | LC_ALL=C sort)
 YAML_FILES = $(shell find .github -type f \( -name '*.yml' -o -name '*.yaml' \) | LC_ALL=C sort)
 RESOURCES = $(CONTENTS)/Resources
+# Ayudante que transcribe en local con Parakeet (paquete Swift aparte, ver ParakeetHelper/).
+PARAKEET_DIR = ParakeetHelper
+ifeq ($(ARCH),universal)
+PARAKEET_BUILD_FLAGS = --arch arm64 --arch x86_64
+else
+PARAKEET_BUILD_FLAGS = --arch $(ARCH)
+endif
 ARCH ?= $(shell uname -m)
 
 # Pick the icon source based on which bundle we are building. Dev builds get
@@ -56,7 +64,7 @@ ICON_SOURCE = Resources/AppIcon-Source.png
 ICON_ICNS = Resources/AppIcon.icns
 endif
 
-.PHONY: all check clean run icon dmg codesign-dmg notarize test typecheck validate
+.PHONY: all check clean run icon dmg codesign-dmg notarize test typecheck validate parakeet-helper
 
 all: $(APP_EXECUTABLE_TARGET)
 
@@ -99,8 +107,15 @@ endif
 	@plutil -replace NSMicrophoneUsageDescription -string "$(APP_NAME) needs microphone access to transcribe your speech." "$(CONTENTS)/Info.plist"
 	@plutil -replace NSSpeechRecognitionUsageDescription -string "$(APP_NAME) needs speech recognition to convert your voice to text." "$(CONTENTS)/Info.plist"
 	@plutil -replace NSAccessibilityUsageDescription -string "$(APP_NAME) needs accessibility access to detect the text cursor position and paste transcribed text." "$(CONTENTS)/Info.plist"
+	@swift build -c release --package-path $(PARAKEET_DIR) $(PARAKEET_BUILD_FLAGS)
+	@mkdir -p "$(CONTENTS)/Helpers"
+	@cp "$$(swift build -c release --package-path $(PARAKEET_DIR) $(PARAKEET_BUILD_FLAGS) --show-bin-path)/freeflow-parakeet" "$(CONTENTS)/Helpers/freeflow-parakeet"
+	@codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$(CONTENTS)/Helpers/freeflow-parakeet"
 	@codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" --entitlements FreeFlow.entitlements "$(APP_BUNDLE)"
 	@echo "Built $(APP_BUNDLE)"
+
+parakeet-helper:
+	swift build -c release --package-path $(PARAKEET_DIR) $(PARAKEET_BUILD_FLAGS)
 
 check: typecheck test validate
 

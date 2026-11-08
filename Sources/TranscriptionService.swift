@@ -61,6 +61,7 @@ class TranscriptionService {
     let transcriptionModel: String
     private let language: String?
     private let vocabularyPrompt: String?
+    let engine: TranscriptionEngine
     private var transcriptionResponseFormat: String {
         Self.responseFormat(forModel: transcriptionModel)
     }
@@ -74,12 +75,18 @@ class TranscriptionService {
         baseURL: String = "https://api.groq.com/openai/v1",
         transcriptionModel: String = "whisper-large-v3",
         language: String? = nil,
-        vocabularyPrompt: String? = nil
+        vocabularyPrompt: String? = nil,
+        engine: TranscriptionEngine = .cloud
     ) throws {
+        self.engine = engine
         self.apiKey = apiKey
         self.baseURL = try Self.normalizedBaseURL(from: baseURL)
         let trimmedModel = transcriptionModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.transcriptionModel = trimmedModel.isEmpty ? "whisper-large-v3" : trimmedModel
+        if engine == .parakeet {
+            self.transcriptionModel = TranscriptionEngine.parakeetModelName
+        } else {
+            self.transcriptionModel = trimmedModel.isEmpty ? "whisper-large-v3" : trimmedModel
+        }
         let trimmedLanguage = language?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.language = (trimmedLanguage?.isEmpty == false) ? trimmedLanguage : nil
         self.vocabularyPrompt = vocabularyPrompt
@@ -119,6 +126,10 @@ class TranscriptionService {
     func transcribe(fileURL: URL) async throws -> String {
         guard !Task.isCancelled else {
             throw CancellationError()
+        }
+        // En local no hay red que se cuelgue; la primera vez puede tardar en cargar el modelo.
+        if engine == .parakeet {
+            return try await LocalParakeetEngine.shared.transcribe(fileURL: fileURL)
         }
 
         let timeoutSeconds = transcriptionTimeoutSeconds

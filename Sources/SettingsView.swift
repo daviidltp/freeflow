@@ -17,9 +17,15 @@ struct SettingsCard<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(title)
-                .font(WisprFonts.figtree(15, weight: .semibold))
-                .foregroundStyle(WisprPalette.foreground)
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(WisprPalette.mutedForeground)
+                    .frame(width: 16)
+                Text(title)
+                    .font(WisprFonts.figtree(15, weight: .semibold))
+                    .foregroundStyle(WisprPalette.foreground)
+            }
             content
         }
         .padding(20)
@@ -32,6 +38,119 @@ struct SettingsCard<Content: View>: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(WisprPalette.border, lineWidth: 1)
         )
+    }
+}
+
+// MARK: - Filas al estilo de Hex
+
+/// Grupo de filas dentro de una tarjeta con borde fino, como en los ajustes de Hex.
+struct SettingsGroup<Content: View>: View {
+    let title: String?
+    let content: Content
+
+    init(_ title: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let title {
+                Text(title)
+                    .font(WisprFonts.figtree(13, weight: .semibold))
+                    .foregroundStyle(WisprPalette.mutedForeground)
+                    .padding(.leading, 4)
+            }
+            VStack(spacing: 0) {
+                content
+            }
+            .padding(.horizontal, 18)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(WisprPalette.card)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(WisprPalette.border, lineWidth: 1)
+            )
+        }
+    }
+}
+
+/// Separador entre filas, alineado con el texto (después del icono).
+struct SettingsRowDivider: View {
+    var body: some View {
+        Rectangle()
+            .fill(WisprPalette.border)
+            .frame(height: 1)
+            .padding(.leading, 34)
+    }
+}
+
+/// Fila: icono, título y explicación opcional a la izquierda; valor o control a la derecha.
+struct SettingsRow<Trailing: View>: View {
+    let icon: String
+    let title: String
+    let detail: String?
+    let trailing: Trailing
+
+    init(_ title: String, icon: String, detail: String? = nil, @ViewBuilder trailing: () -> Trailing) {
+        self.title = title
+        self.icon = icon
+        self.detail = detail
+        self.trailing = trailing()
+    }
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .regular))
+                .foregroundStyle(WisprPalette.foreground.opacity(0.75))
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(WisprFonts.figtree(14, weight: .medium))
+                    .foregroundStyle(WisprPalette.foreground)
+                if let detail {
+                    Text(detail)
+                        .font(WisprFonts.figtree(12))
+                        .foregroundStyle(WisprPalette.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 12)
+            trailing
+        }
+        .padding(.vertical, detail == nil ? 14 : 12)
+        .frame(minHeight: 52)
+    }
+}
+
+/// Valor de la derecha que abre un menú: texto en negrita y una flecha, sin borde.
+struct SettingsMenu<Content: View>: View {
+    let value: String
+    let content: Content
+
+    init(_ value: String, @ViewBuilder content: () -> Content) {
+        self.value = value
+        self.content = content()
+    }
+
+    var body: some View {
+        Menu {
+            content
+        } label: {
+            // Un solo Text: el menú de macOS coloca las imágenes sueltas delante del texto.
+            (Text(value).font(WisprFonts.figtree(14, weight: .semibold))
+                + Text("  ")
+                + Text(Image(systemName: "chevron.up.chevron.down"))
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(WisprPalette.mutedForeground))
+                .foregroundColor(WisprPalette.foreground)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
     }
 }
 
@@ -620,6 +739,12 @@ struct GeneralSettingsView: View {
     @AppStorage("overlay_display_id") private var overlayDisplayID = 0
     @AppStorage(IdleIslandPreference.storageKey) private var showIdleIsland = true
     @AppStorage(RecordingTimerPreference.storageKey) private var showRecordingTimer = RecordingTimerPreference.defaultEnabled
+    @AppStorage(IslandThemePreference.storageKey) private var islandTheme = IslandThemePreference.system.rawValue
+    @AppStorage(IslandAnchor.storageKey) private var islandAnchor = IslandAnchor.bottom.rawValue
+    @AppStorage(IslandChipStyle.storageKey) private var chipStyle = IslandChipStyle.classic.rawValue
+    @State private var showsShortcutEditor = false
+    @State private var showsAdvanced = false
+    @ObservedObject private var parakeet = LocalParakeetEngine.shared
     @State private var screensVersion = 0
     @State private var apiDraft = APIConfigurationDraft()
     @State private var advancedProviderSettingsExpanded = false
@@ -669,55 +794,19 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                PageHeader("Settings")
+            VStack(alignment: .leading, spacing: 26) {
+                Text("General")
+                    .font(WisprFonts.figtree(20, weight: .semibold))
+                    .foregroundStyle(WisprPalette.foreground)
+                    .padding(.leading, 4)
 
-                SettingsCard("App", icon: "power") {
-                    startupSection
-                }
-                SettingsCard("Updates", icon: "arrow.triangle.2.circlepath") {
-                    updatesSection
-                }
-                SettingsCard("API Key", icon: "key.fill") {
-                    apiKeySection
-                }
-                SettingsCard("Output Language", icon: "globe") {
-                    outputLanguageSection
-                }
-                SettingsCard("Dictation Shortcuts", icon: "keyboard.fill") {
-                    hotkeySection
-                }
-                SettingsCard("Audio During Dictation", icon: "speaker.slash.fill") {
-                    dictationAudioSection
-                }
-                SettingsCard("Recording Overlay", icon: "rectangle.dashed") {
-                    overlaySection
-                }
-                SettingsCard("Edit Mode", icon: "pencil") {
-                    commandModeSection
-                }
-                SettingsCard("Cleanup", icon: "sparkles") {
-                    cleanupSection
-                }
-                SettingsCard("Text insertion", icon: "text.cursor") {
-                    textInsertionSection
-                }
-                SettingsCard("Clipboard", icon: "doc.on.clipboard") {
-                    clipboardSection
-                }
-                SettingsCard("Microphone", icon: "mic.fill") {
-                    microphoneSection
-                }
-                SettingsCard("Sound Volume", icon: "speaker.wave.2.fill") {
-                    soundVolumeSection
-                }
-                SettingsCard("Permissions", icon: "lock.shield.fill") {
-                    permissionsSection
-                }
-                SettingsCard("Build", icon: "info.circle.fill") {
-                    buildInfoSection
-                }
+                generalGroup
+                islandGroup
+                textGroup
+                advancedSection
             }
+            .frame(maxWidth: 720)
+            .frame(maxWidth: .infinity)
             .padding(24)
         }
         .onAppear {
@@ -746,22 +835,324 @@ struct GeneralSettingsView: View {
         }
     }
 
+    // MARK: General
+
+    private var shortcutSummary: String {
+        let hold = appState.holdShortcut
+        let toggle = appState.toggleShortcut
+        switch (hold.isDisabled, toggle.isDisabled) {
+        case (false, false): return "Mantén \(hold.displayName) · pulsa \(toggle.displayName)"
+        case (false, true): return "Mantén \(hold.displayName)"
+        case (true, false): return "Pulsa \(toggle.displayName)"
+        case (true, true): return "Desactivado"
+        }
+    }
+
+    private var engineValue: String {
+        switch appState.transcriptionEngine {
+        case .parakeet: return "Parakeet v3"
+        case .cloud: return Self.modelLabel(appState.transcriptionModel)
+        }
+    }
+
+    /// Nombre corto de un modelo: sin el proveedor delante y con el estilo de Hex.
+    private static func modelLabel(_ id: String) -> String {
+        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "Whisper large-v3" }
+        if trimmed.hasPrefix("whisper-") {
+            return "Whisper " + trimmed.dropFirst("whisper-".count)
+        }
+        return String(trimmed.split(separator: "/").last ?? Substring(trimmed))
+    }
+
+    private var engineDetail: String {
+        switch appState.transcriptionEngine {
+        case .cloud:
+            return "En la nube, con tu proveedor."
+        case .parakeet:
+            switch parakeet.status {
+            case .ready: return "En tu Mac, sin internet. Listo."
+            case .loading: return "En tu Mac. Cargando el modelo…"
+            case .stopped: return "En tu Mac. Se carga al dictar."
+            case let .failed(message): return "No se pudo cargar: \(message)"
+            }
+        }
+    }
+
+    private var microphoneValue: String {
+        let id = appState.selectedMicrophoneID
+        if id.isEmpty || id == "default" { return "El del sistema" }
+        return appState.availableMicrophones.first { $0.uid == id }?.name ?? "El del sistema"
+    }
+
+    private var generalGroup: some View {
+        SettingsGroup {
+            Button {
+                withAnimation(.easeOut(duration: 0.15)) { showsShortcutEditor.toggle() }
+            } label: {
+                SettingsRow("Atajo", icon: "keyboard") {
+                    HStack(spacing: 6) {
+                        Text(shortcutSummary)
+                            .font(WisprFonts.figtree(14, weight: .semibold))
+                            .foregroundStyle(WisprPalette.foreground)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(WisprPalette.mutedForeground)
+                            .rotationEffect(.degrees(showsShortcutEditor ? 90 : 0))
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if showsShortcutEditor {
+                VStack(alignment: .leading, spacing: 14) {
+                    DictationShortcutEditor(showsIntroText: false) { isCapturing in
+                        if isCapturing {
+                            appState.suspendHotkeyMonitoringForShortcutCapture()
+                        } else {
+                            appState.resumeHotkeyMonitoringAfterShortcutCapture()
+                        }
+                    }
+                }
+                .padding(.leading, 34)
+                .padding(.bottom, 14)
+                .transition(.opacity)
+            }
+            SettingsRowDivider()
+            SettingsRow("Modelo de voz", icon: "waveform", detail: engineDetail) {
+                SettingsMenu(engineValue) {
+                    Section("En tu Mac") {
+                        Button("Parakeet v3") { appState.transcriptionEngine = .parakeet }
+                    }
+                    Section("En la nube") {
+                        ForEach(ModelConfiguration.transcriptionModels, id: \.self) { model in
+                            Button(Self.modelLabel(model)) {
+                                appState.transcriptionModel = model
+                                appState.transcriptionEngine = .cloud
+                            }
+                        }
+                    }
+                }
+            }
+            SettingsRowDivider()
+            SettingsRow("Modelo de limpieza", icon: "wand.and.stars", detail: "La IA que limpia el texto. Otros modelos, en Avanzado.") {
+                SettingsMenu(Self.modelLabel(appState.postProcessingModel)) {
+                    ForEach(ModelConfiguration.llmModels, id: \.self) { model in
+                        Button(Self.modelLabel(model)) { appState.postProcessingModel = model }
+                    }
+                }
+                .disabled(appState.preserveExactWording)
+            }
+            SettingsRowDivider()
+            SettingsRow("Idioma de salida", icon: "character.bubble") {
+                SettingsMenu(appState.outputLanguage.isEmpty ? "El que hablas" : appState.outputLanguage) {
+                    Button("El que hablas") { appState.outputLanguage = "" }
+                    ForEach(Self.outputLanguageOptions.dropFirst(), id: \.self) { lang in
+                        Button(lang) { appState.outputLanguage = lang }
+                    }
+                }
+            }
+            SettingsRowDivider()
+            SettingsRow("Micrófono", icon: "mic") {
+                SettingsMenu(microphoneValue) {
+                    Button("El del sistema") { appState.selectedMicrophoneID = "default" }
+                    ForEach(appState.availableMicrophones) { device in
+                        Button(device.name) { appState.selectedMicrophoneID = device.uid }
+                    }
+                }
+            }
+            SettingsRowDivider()
+            SettingsRow("Limpieza con IA", icon: "sparkles", detail: "Quita muletillas y deja solo lo que corriges.") {
+                Toggle("", isOn: Binding(
+                    get: { !appState.preserveExactWording },
+                    set: { appState.preserveExactWording = !$0 }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+            }
+            SettingsRowDivider()
+            SettingsRow("Iniciar al iniciar sesión", icon: "power") {
+                Toggle("", isOn: $appState.launchAtLogin)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
+        }
+        .onAppear { appState.refreshAvailableMicrophones() }
+    }
+
+    // MARK: Island
+
+    private var anchorValue: String {
+        switch IslandAnchor(rawValue: islandAnchor) ?? .bottom {
+        case .top: return "Arriba"
+        case .bottom: return "Abajo"
+        case .left: return "Izquierda"
+        case .right: return "Derecha"
+        }
+    }
+
+    private var displayValue: String {
+        switch overlayDisplayID {
+        case 0: return "La de la ventana activa"
+        case -1: return "La principal"
+        default: return connectedScreenEntries.first { $0.tag == overlayDisplayID }?.name ?? "La de la ventana activa"
+        }
+    }
+
+    private var islandGroup: some View {
+        SettingsGroup("Isla") {
+            SettingsRow("Estilo", icon: "waveform.path", detail: "Cómo se ve la isla mientras grabas y procesas.") {
+                SettingsMenu((IslandChipStyle(rawValue: chipStyle) ?? .classic).label) {
+                    ForEach(IslandChipStyle.allCases) { style in
+                        Button(style.label) { chipStyle = style.rawValue }
+                    }
+                }
+            }
+            SettingsRowDivider()
+            SettingsRow("Tema", icon: "circle.lefthalf.filled", detail: "Para el estilo de puntos.") {
+                SettingsMenu((IslandThemePreference(rawValue: islandTheme) ?? .system).label) {
+                    ForEach(IslandThemePreference.allCases) { theme in
+                        Button(theme.label) { islandTheme = theme.rawValue }
+                    }
+                }
+            }
+            SettingsRowDivider()
+            SettingsRow("Posición", icon: "rectangle.center.inset.filled", detail: "También puedes arrastrar la barrita en reposo.") {
+                SettingsMenu(anchorValue) {
+                    Button("Arriba") { setAnchor(.top) }
+                    Button("Abajo") { setAnchor(.bottom) }
+                    Button("Izquierda") { setAnchor(.left) }
+                    Button("Derecha") { setAnchor(.right) }
+                }
+            }
+            SettingsRowDivider()
+            SettingsRow("Pantalla", icon: "display") {
+                SettingsMenu(displayValue) {
+                    Button("La de la ventana activa") { overlayDisplayID = 0 }
+                    Button("La principal") { overlayDisplayID = -1 }
+                    ForEach(connectedScreenEntries, id: \.tag) { entry in
+                        Button(entry.name) { overlayDisplayID = entry.tag }
+                    }
+                }
+            }
+            SettingsRowDivider()
+            SettingsRow("Barrita en reposo", icon: "capsule", detail: "Al pasar el ratón se convierte en un botón para dictar.") {
+                Toggle("", isOn: $showIdleIsland)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .onChange(of: showIdleIsland) { _ in appState.overlayManager.refreshIdleIsland() }
+            }
+            SettingsRowDivider()
+            SettingsRow("Cronómetro", icon: "timer") {
+                Toggle("", isOn: $showRecordingTimer)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
+            screensVersion &+= 1
+        }
+    }
+
+    private func setAnchor(_ anchor: IslandAnchor) {
+        islandAnchor = anchor.rawValue
+        appState.overlayManager.applyAnchorChange()
+    }
+
+    // MARK: Text
+
+    private func switchRow(_ title: String, icon: String, detail: String? = nil, isOn: Binding<Bool>) -> some View {
+        SettingsRow(title, icon: icon, detail: detail) {
+            Toggle("", isOn: isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+        }
+    }
+
+    private var textGroup: some View {
+        SettingsGroup("Texto y audio") {
+            switchRow("Pegar donde empezaste", icon: "text.cursor", detail: "Aunque cambies de app mientras hablas.", isOn: $appState.originalFieldInsertionEnabled)
+            SettingsRowDivider()
+            switchRow("Decir \"press enter\" para enviar", icon: "return", isOn: $appState.isPressEnterVoiceCommandEnabled)
+            SettingsRowDivider()
+            switchRow("Recuperar el portapapeles", icon: "doc.on.clipboard", detail: "Después de pegar, vuelve lo que tenías copiado.", isOn: $appState.preserveClipboard)
+            SettingsRowDivider()
+            switchRow("Guardar en el historial del portapapeles", icon: "clock.arrow.circlepath", isOn: $appState.keepDictationInClipboardHistory)
+            SettingsRowDivider()
+            switchRow("Silenciar el audio al dictar", icon: "speaker.slash", isOn: $appState.dictationAudioInterruptionEnabled)
+            SettingsRowDivider()
+            switchRow("Sonidos de aviso", icon: "bell", isOn: $appState.alertSoundsEnabled)
+        }
+    }
+
+    // MARK: Advanced
+
+    private var advancedSection: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Button {
+                withAnimation(.easeOut(duration: 0.15)) { showsAdvanced.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Avanzado")
+                        .font(WisprFonts.figtree(14, weight: .medium))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .bold))
+                        .rotationEffect(.degrees(showsAdvanced ? 90 : 0))
+                }
+                .foregroundStyle(WisprPalette.mutedForeground)
+                .padding(.leading, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if showsAdvanced {
+                VStack(spacing: 16) {
+                    SettingsCard("Clave de API", icon: "key.fill") { apiKeySection }
+                    SettingsCard("Modo edición", icon: "pencil") { commandModeSection }
+                    SettingsCard("Retraso al empezar", icon: "timer") { startDelaySection }
+                    SettingsCard("Volumen de los sonidos", icon: "speaker.wave.2.fill") { soundVolumeSection }
+                    SettingsCard("Permisos", icon: "lock.shield.fill") { permissionsSection }
+                    SettingsCard("App", icon: "menubar.rectangle") { startupSection }
+                    SettingsCard("Actualizaciones", icon: "arrow.triangle.2.circlepath") { updatesSection }
+                    SettingsCard("Versión", icon: "info.circle.fill") { buildInfoSection }
+                }
+                .transition(.opacity)
+            }
+        }
+    }
+
+    private var startDelaySection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Espera antes de grabar")
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Text("\(appState.shortcutStartDelayMilliseconds) ms")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            Slider(value: $appState.shortcutStartDelay, in: 0...0.5, step: 0.025)
+            Text("Parar siempre es inmediato.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     // MARK: Startup
 
     private var startupSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Toggle("Launch \(AppName.displayName) at login", isOn: $appState.launchAtLogin)
-            Toggle("Show menu bar icon", isOn: $showMenuBarIcon)
+            Toggle("Icono en la barra de menús", isOn: $showMenuBarIcon)
 
             if SMAppService.mainApp.status == .requiresApproval {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
                         .font(.caption)
-                    Text("Login item requires approval in System Settings.")
+                    Text("Tienes que aprobarlo en Ajustes del Sistema.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Button("Open Login Items Settings") {
+                    Button("Abrir ajustes") {
                         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!)
                     }
                     .font(.caption)
@@ -774,7 +1165,7 @@ struct GeneralSettingsView: View {
 
     private var updatesSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Toggle("Automatically check for updates", isOn: Binding(
+            Toggle("Buscar actualizaciones automáticamente", isOn: Binding(
                 get: { updateManager.autoCheckEnabled },
                 set: { updateManager.autoCheckEnabled = $0 }
             ))
@@ -789,16 +1180,16 @@ struct GeneralSettingsView: View {
                         HStack(spacing: 6) {
                             ProgressView()
                                 .controlSize(.small)
-                            Text("Checking...")
+                            Text("Buscando…")
                         }
                     } else {
-                        Text("Check for Updates Now")
+                        Text("Buscar ahora")
                     }
                 }
                 .disabled(updateManager.isChecking || updateManager.updateStatus != .idle)
 
                 if let lastCheck = updateManager.lastCheckDate {
-                    Text("Last checked: \(lastCheck.formatted(date: .abbreviated, time: .shortened))")
+                    Text("Última vez: \(lastCheck.formatted(date: .abbreviated, time: .shortened))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -812,7 +1203,7 @@ struct GeneralSettingsView: View {
                             Image(systemName: "arrow.down.circle.fill")
                                 .foregroundStyle(.blue)
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("Downloading update...")
+                                Text("Descargando actualización…")
                                     .font(.caption.weight(.semibold))
                                 ProgressView(value: updateManager.downloadProgress ?? 0)
                                     .progressViewStyle(.linear)
@@ -823,7 +1214,7 @@ struct GeneralSettingsView: View {
                                 }
                             }
                             Spacer()
-                            Button("Cancel") {
+                            Button("Cancelar") {
                                 updateManager.cancelDownload()
                             }
                             .font(.caption)
@@ -833,7 +1224,7 @@ struct GeneralSettingsView: View {
                         HStack(spacing: 8) {
                             ProgressView()
                                 .controlSize(.small)
-                            Text("Installing update...")
+                            Text("Instalando actualización…")
                                 .font(.caption.weight(.semibold))
                         }
 
@@ -841,7 +1232,7 @@ struct GeneralSettingsView: View {
                         HStack(spacing: 8) {
                             ProgressView()
                                 .controlSize(.small)
-                            Text("Relaunching...")
+                            Text("Reiniciando…")
                                 .font(.caption.weight(.semibold))
                         }
 
@@ -853,7 +1244,7 @@ struct GeneralSettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.red)
                             Spacer()
-                            Button("Retry") {
+                            Button("Reintentar") {
                                 updateManager.updateStatus = .idle
                                 if let release = updateManager.latestRelease {
                                     updateManager.downloadAndInstall(release: release)
@@ -867,15 +1258,15 @@ struct GeneralSettingsView: View {
                             Image(systemName: "arrow.down.circle.fill")
                                 .foregroundStyle(.blue)
                             Text(updateManager.latestReleaseVersion.isEmpty
-                                ? "A new version of \(AppName.displayName) is available!"
-                                : "\(AppName.displayName) v\(updateManager.latestReleaseVersion) is available!")
+                                ? "Hay una versión nueva de \(AppName.displayName)"
+                                : "\(AppName.displayName) v\(updateManager.latestReleaseVersion) disponible")
                                 .font(.caption.weight(.semibold))
                             Spacer()
-                            Button("What's New") {
+                            Button("Novedades") {
                                 updateManager.showReleaseNotes()
                             }
                             .font(.caption)
-                            Button("Update Now") {
+                            Button("Actualizar") {
                                 if let release = updateManager.latestRelease {
                                     updateManager.downloadAndInstall(release: release)
                                 }
@@ -896,7 +1287,7 @@ struct GeneralSettingsView: View {
     private var buildInfoSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Build number")
+                Text("Compilación")
                     .font(.caption.weight(.semibold))
                 Spacer()
                 Text(appBuildNumber)
@@ -916,7 +1307,7 @@ struct GeneralSettingsView: View {
                 Button {
                     copyBuildDiagnostics()
                 } label: {
-                    Label(copiedBuildInfo ? "Copied" : "Copy", systemImage: copiedBuildInfo ? "checkmark" : "doc.on.doc")
+                    Label(copiedBuildInfo ? "Copiado" : "Copiar", systemImage: copiedBuildInfo ? "checkmark" : "doc.on.doc")
                 }
                 .font(.caption)
             }
@@ -942,17 +1333,17 @@ struct GeneralSettingsView: View {
 
     private var apiKeySection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("\(AppName.displayName) uses the configured transcription model with your selected OpenAI-compatible provider.")
+            Text("Se usa para limpiar el texto con IA y, si transcribes en la nube, también para transcribir.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 8) {
-                SecureField("Enter your Groq API key", text: $apiDraft.apiKey)
+                SecureField("Tu clave de API de Groq", text: $apiDraft.apiKey)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(.body, design: .monospaced))
                     .disabled(isValidatingKey)
 
-                Button(isValidatingKey ? "Validating..." : "Save") {
+                Button(isValidatingKey ? "Comprobando…" : "Guardar") {
                     validateAndSaveKey()
                 }
                 .disabled(apiDraft.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isValidatingKey)
@@ -963,7 +1354,7 @@ struct GeneralSettingsView: View {
                     .foregroundStyle(.red)
                     .font(.caption)
             } else if apiDraft.showsSavedSuccess(successfulAPIConfiguration, committed: appState.committedAPIConfiguration) {
-                Label("API key saved", systemImage: "checkmark.circle.fill")
+                Label("Clave guardada", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
                     .font(.caption)
             }
@@ -980,7 +1371,7 @@ struct GeneralSettingsView: View {
                 }
             } label: {
                 HStack {
-                    Text("Advanced Provider Settings")
+                    Text("Proveedor avanzado")
                     Spacer()
                 }
                 .contentShape(Rectangle())
@@ -1023,7 +1414,7 @@ struct GeneralSettingsView: View {
                appState.committedAPIConfiguration == accepted {
                 successfulAPIConfiguration = accepted
             } else if !valid && apiDraft.matches(submission) {
-                keyValidationError = "Validation failed. Please check your API key and provider settings, then try again."
+                keyValidationError = "No se ha podido validar. Revisa la clave y el proveedor."
             }
         }
     }
@@ -1043,124 +1434,6 @@ struct GeneralSettingsView: View {
         "Portuguese",
     ]
 
-    private var outputLanguageSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Picker("Language", selection: $appState.outputLanguage) {
-                Text("Same as spoken").tag("")
-                ForEach(Self.outputLanguageOptions.dropFirst(), id: \.self) { lang in
-                    Text(lang).tag(lang)
-                }
-            }
-            .pickerStyle(.menu)
-
-            Text("When set, FreeFlow translates your speech into the selected language.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    // MARK: Dictation Shortcuts
-
-    private var hotkeySection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            DictationShortcutEditor { isCapturing in
-                if isCapturing {
-                    appState.suspendHotkeyMonitoringForShortcutCapture()
-                } else {
-                    appState.resumeHotkeyMonitoringAfterShortcutCapture()
-                }
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Shortcut Start Delay")
-                        .font(.caption.weight(.semibold))
-                    Spacer()
-                    Text("\(appState.shortcutStartDelayMilliseconds) ms")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-
-                Slider(
-                    value: $appState.shortcutStartDelay,
-                    in: 0...0.5,
-                    step: 0.025
-                )
-
-                Text("Applies before recording starts for both hold and tap shortcuts. Stopping still happens immediately.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    // MARK: Recording Overlay
-
-    private var overlaySection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Toggle("Show idle island", isOn: $showIdleIsland)
-                .onChange(of: showIdleIsland) { _ in appState.overlayManager.refreshIdleIsland() }
-            Text("A thin bar at the bottom of the screen that turns into a dictate button when you hover it.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Toggle("Show recording timer", isOn: $showRecordingTimer)
-            Text("Adds a timer to the left of the waveform in the floating island. Applies to the next recording.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Divider()
-
-            overlayDisplaySection
-        }
-    }
-
-    // MARK: Audio During Dictation
-
-    private var dictationAudioSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Toggle(
-                "Mute audio when dictation starts",
-                isOn: $appState.dictationAudioInterruptionEnabled
-            )
-
-            Text("\(AppName.displayName) restores the audio state it changed when dictation ends.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    /// Picks which physical display the recording overlay drops down on.
-    /// Without this, AppKit defaults to "the screen with the active key
-    /// window" (NSScreen.main), which makes the pill follow focus across
-    /// monitors — disorienting on multi-display setups.
-    private var overlayDisplaySection: some View {
-        HStack {
-            Text("Show on")
-                .font(.system(size: 13))
-            Spacer()
-            Picker("", selection: $overlayDisplayID) {
-                Text("Active window (default)").tag(0)
-                Text("Primary display").tag(-1)
-                ForEach(connectedScreenEntries, id: \.tag) { entry in
-                    Text(entry.name).tag(entry.tag)
-                }
-            }
-            .labelsHidden()
-            .accessibilityLabel("Show on")
-            .pickerStyle(.menu)
-            .frame(maxWidth: 240)
-        }
-        // Re-query NSScreen.screens whenever the display arrangement
-        // changes so newly-attached monitors appear in the menu without
-        // reopening Settings. screensVersion is just a cache-buster.
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
-            screensVersion &+= 1
-        }
-    }
-
     private var connectedScreenEntries: [(name: String, tag: Int)] {
         _ = screensVersion
         return NSScreen.screens.compactMap { screen in
@@ -1173,18 +1446,18 @@ struct GeneralSettingsView: View {
 
     private var commandModeSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Toggle("Enable Edit Mode", isOn: Binding(
+            Toggle("Activar modo edición", isOn: Binding(
                 get: { appState.isCommandModeEnabled },
                 set: { newValue in
                     _ = appState.setCommandModeEnabled(newValue)
                 }
             ))
 
-            Text("Transform highlighted text with a spoken instruction instead of dictating over it.")
+            Text("Selecciona texto y dicta una instrucción para transformarlo.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            Picker("Invocation Style", selection: Binding(
+            Picker("Cómo se activa", selection: Binding(
                 get: { appState.commandModeStyle },
                 set: { newValue in
                     _ = appState.setCommandModeStyle(newValue)
@@ -1200,16 +1473,16 @@ struct GeneralSettingsView: View {
             Group {
                 switch appState.commandModeStyle {
                 case .automatic:
-                    Text("If text is selected, your normal dictation shortcut transforms the selection instead of dictating over it.")
+                    Text("Si hay texto seleccionado, tu atajo normal lo transforma en vez de dictar encima.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 case .manual:
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Hold the extra modifier together with your normal dictation shortcut to transform selected text.")
+                        Text("Mantén la tecla extra junto con tu atajo para transformar la selección.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
-                        Picker("Extra Modifier", selection: Binding(
+                        Picker("Tecla extra", selection: Binding(
                             get: { appState.commandModeManualModifier },
                             set: { newValue in
                                 _ = appState.setCommandModeManualModifier(newValue)
@@ -1233,98 +1506,10 @@ struct GeneralSettingsView: View {
         }
     }
 
-    // MARK: Cleanup
-
-    private var cleanupSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Toggle("Preserve exact wording", isOn: $appState.preserveExactWording)
-
-            Text("When on, \(AppName.displayName) skips the LLM cleanup step and pastes the transcript verbatim — filler words, informal phrasing, and explicit language are all preserved. Voice macros and Edit Mode still run.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Text("If Output Language is set, the transcript is still translated into that language, but the translation is literal: no rewording, no filler removal, no reformatting.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    // MARK: Text insertion
-
-    private var textInsertionSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Toggle("Insert into the original field", isOn: $appState.originalFieldInsertionEnabled)
-
-            Text("Keep dictation in the field where recording began, even after switching apps. Off by default; applies to new dictations. Pasting or pressing Return may briefly bring the original app forward, then restore your previous focus when possible.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Divider()
-                .padding(.vertical, 2)
-
-            Toggle("Say \"press enter\" to submit after paste", isOn: $appState.isPressEnterVoiceCommandEnabled)
-
-            Text("When the transcription ends with \"press enter\", \(AppName.displayName) removes those words before cleanup, pastes the remaining transcript, then presses Return.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    // MARK: Clipboard
-
-    private var clipboardSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Toggle("Preserve clipboard after paste", isOn: $appState.preserveClipboard)
-
-            Text("\(AppName.displayName) will temporarily place the transcript on your clipboard to paste it, then restore whatever was there before. If you copy something else before the restore happens, \(AppName.displayName) leaves it alone.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Divider()
-                .padding(.vertical, 2)
-
-            Toggle("Keep dictations in clipboard history", isOn: $appState.keepDictationInClipboardHistory)
-
-            Text("When on, your clipboard manager (Paste, Raycast, Maccy, etc.) records each dictation so you can find it in your recent history. When off, \(AppName.displayName) marks dictations transient and your clipboard manager skips them.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    // MARK: Microphone
-
-    private var microphoneSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Select which microphone to use for recording.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            VStack(spacing: 6) {
-                MicrophoneOptionRow(
-                    name: "System Default",
-                    isSelected: appState.selectedMicrophoneID == "default" || appState.selectedMicrophoneID.isEmpty,
-                    action: { appState.selectedMicrophoneID = "default" }
-                )
-                ForEach(appState.availableMicrophones) { device in
-                    MicrophoneOptionRow(
-                        name: device.name,
-                        isSelected: appState.selectedMicrophoneID == device.uid,
-                        action: { appState.selectedMicrophoneID = device.uid }
-                    )
-                }
-            }
-        }
-        .onAppear {
-            appState.refreshAvailableMicrophones()
-        }
-    }
-
     // MARK: Sound Volume
 
     private var soundVolumeSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Toggle("Play alert sounds", isOn: $appState.alertSoundsEnabled)
-
             HStack(spacing: 12) {
                 Image(systemName: "speaker.fill")
                     .foregroundStyle(.secondary)
@@ -1342,7 +1527,7 @@ struct GeneralSettingsView: View {
             .opacity(appState.alertSoundsEnabled ? 1 : 0.5)
 
             HStack(spacing: 8) {
-                Button("Preview") {
+                Button("Probar") {
                     let muted = SystemAudioStatus.isDefaultOutputMuted()
                     let volume = SystemAudioStatus.defaultOutputVolume()
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -1357,7 +1542,7 @@ struct GeneralSettingsView: View {
                     HStack(spacing: 4) {
                         Image(systemName: "speaker.slash.fill")
                             .foregroundStyle(.orange)
-                        Text("System volume is muted or very low. Unmute to hear the preview.")
+                        Text("El volumen del sistema está silenciado o muy bajo.")
                             .foregroundStyle(.secondary)
                     }
                     .font(.caption)
@@ -1375,7 +1560,7 @@ struct GeneralSettingsView: View {
     private var permissionsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             permissionRow(
-                title: "Microphone",
+                title: "Micrófono",
                 icon: "mic.fill",
                 granted: micPermissionGranted,
                 action: {
@@ -1386,7 +1571,7 @@ struct GeneralSettingsView: View {
             )
 
             permissionRow(
-                title: "Accessibility",
+                title: "Accesibilidad",
                 icon: "hand.raised.fill",
                 granted: appState.hasAccessibility,
                 action: {
@@ -1395,7 +1580,7 @@ struct GeneralSettingsView: View {
             )
 
             permissionRow(
-                title: "Screen Recording",
+                title: "Grabación de pantalla",
                 icon: "camera.viewfinder",
                 granted: appState.hasScreenRecordingPermission,
                 action: {
@@ -1415,11 +1600,11 @@ struct GeneralSettingsView: View {
             if granted {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.green)
-                Text("Granted")
+                Text("Concedido")
                     .font(.caption)
                     .foregroundStyle(.green)
             } else {
-                Button("Grant Access") {
+                Button("Dar acceso") {
                     action()
                 }
                 .font(.caption)
