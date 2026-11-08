@@ -51,7 +51,8 @@ enum LocalParakeetError: LocalizedError {
 
 /// Lanza el ayudante `freeflow-parakeet` (Contents/Helpers) una sola vez, lo mantiene vivo
 /// con el modelo cargado y le pasa rutas de audio por la entrada estándar.
-final class LocalParakeetEngine: ObservableObject {
+/// Todo su estado se toca solo desde `queue` (y `status`, solo en el hilo principal).
+final class LocalParakeetEngine: ObservableObject, @unchecked Sendable {
     static let shared = LocalParakeetEngine()
 
     enum Status: Equatable {

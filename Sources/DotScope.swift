@@ -262,7 +262,8 @@ private struct Scan {
 
 /// Simulación del indicador. Se avanza en pasos fijos de 240 Hz, así cualquier tasa de
 /// refresco dibuja lo mismo.
-final class DotScopeSimulation {
+/// Todo su estado se toca solo desde `queue`.
+final class DotScopeSimulation: @unchecked Sendable {
     private let columns = DotScopeTuning.columns
     private let rows = DotScopeTuning.rows
     private let sampleCount: Int
@@ -685,7 +686,8 @@ private struct DotScopeInputs {
 
 /// Capa que dibuja el indicador en su propia cola a 60 fps. Core Animation compone la imagen
 /// sin pasar por el hilo principal, así que el indicador sigue fluido aunque la app esté ocupada.
-final class DotScopeLayerView: NSView {
+/// Las entradas van protegidas por `lock` y el dibujo solo ocurre en la cola de la simulación.
+final class DotScopeLayerView: NSView, @unchecked Sendable {
     private let simulation: DotScopeSimulation
     private let lock = NSLock()
     private var inputs = DotScopeInputs()
