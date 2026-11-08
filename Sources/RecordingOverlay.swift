@@ -287,6 +287,9 @@ final class RecordingOverlayManager {
         }
     }
 
+    /// La simulación del indicador de puntos, para pasarle el volumen del micro.
+    var dotScope: DotScopeSimulation { overlayState.dotScope }
+
     func dismiss() {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -857,7 +860,6 @@ struct WisprIslandView: View {
             DotScopeView(
                 simulation: state.dotScope,
                 stage: dotScopeStage,
-                level: state.phase == .recording ? state.audioLevel : 0,
                 vertical: isVerticalLayout,
                 dark: isDarkChip
             )

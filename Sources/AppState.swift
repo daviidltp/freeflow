@@ -2424,6 +2424,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 DispatchQueue.main.async { [self] in
                     guard self.isRecording, self.activeRecordingTriggerMode != nil else { return }
                     self.startContextCapture()
+                    let dotScope = self.overlayManager.dotScope
+                    self.audioRecorder.setRMSHandler { rms in dotScope.setRMS(rms) }
                     self.audioLevelCancellable = self.audioRecorder.$audioLevel
                         .receive(on: DispatchQueue.main)
                         .sink { [weak self] level in

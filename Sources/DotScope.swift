@@ -27,6 +27,10 @@ enum DotScopeTuning {
     static let shimmerPass: Float = 0.55
     static let shimmer: Float = 1
     static let transition: Float = 0.30
+    /// Lo que tarda el nivel automático en olvidar un pico fuerte, s.
+    static let autoRelease: Float = 3
+    /// Por debajo de esto el micro nunca enciende el indicador, dBFS.
+    static let noiseFloor: Float = -60
     static let bounce: Float = 0.15
 }
 
@@ -136,6 +140,42 @@ private func flowLight(_ x: Float, offset: Float, spacing: Float) -> Float {
     let shifted = x - offset + spacing / 2
     let d = shifted - spacing * (shifted / spacing).rounded(.down) - spacing / 2
     return bump(d, 7)
+}
+
+/// Nivel automático de Hex: lo más fuerte que has hablado hace poco cuenta como lleno y el
+/// ruido de la habitación como silencio, así que callado no se mueve nada. El pico sube en
+/// 40 ms y baja durante `release`; la habitación baja enseguida a cualquier momento más
+/// silencioso y sube despacio (6 s), para que la voz nunca pase por ruido de fondo.
+private struct AutoLevel {
+    private static let minSpan: Float = 16
+    private static let range: Float = 24
+    private static let roomMargin: Float = 5
+    private static let attack: Float = 0.04
+    private static let roomFall: Float = 0.3
+    private static let roomRise: Float = 6
+
+    /// Un micro de portátil hablando a distancia normal: picos cerca de −30 dB sobre una
+    /// habitación cerca de −55 dB.
+    private var peak: Float = -30
+    private var room: Float = -55
+
+    /// Avanza `h` segundos con `loudness` dBFS y devuelve el nivel de 0 a 1.
+    mutating func step(_ loudness: Float, h: Float, release: Float, noiseFloor: Float) -> Float {
+        let db = max(loudness, -120)
+        func follow(_ value: inout Float, _ target: Float, _ time: Float) {
+            value += (target - value) * (1 - exp(-h / max(time, 1e-3)))
+        }
+        follow(&room, db, db < room ? Self.roomFall : Self.roomRise)
+        let lowest = max(room, noiseFloor) + Self.minSpan
+        if db > peak {
+            follow(&peak, db, Self.attack)
+        } else {
+            follow(&peak, lowest, release)
+        }
+        peak = max(peak, lowest)
+        let low = max(max(room, noiseFloor) + Self.roomMargin, peak - Self.range)
+        return min(max((db - low) / max(peak - low, 1), 0), 1)
+    }
 }
 
 private struct Voice {
@@ -285,6 +325,11 @@ final class DotScopeSimulation: @unchecked Sendable {
     /// Velocidad del frente de borrado al empezar a terminar, pt/s.
     private var speedAtDone: Float = 0
     private var reducedMotion = false
+    /// El nivel automático recuerda a quien habla entre dictados, como en Hex.
+    private var auto = AutoLevel()
+    /// Volumen del micro en dBFS, que llega desde la cola de captura de audio.
+    private let inputLock = NSLock()
+    private var loudnessInput: Float = -120
     private var headLight: [[Float]]
     private var tailLight: [[Float]]
     private var ys: [[Float]]
@@ -314,6 +359,14 @@ final class DotScopeSimulation: @unchecked Sendable {
     /// no se para cuando la app está ocupada (por ejemplo, justo al dejar de grabar).
     let queue = DispatchQueue(label: "app.freeflow.dotscope", qos: .userInteractive)
 
+    /// Nuevo volumen del micro a partir del RMS de un bloque de audio. Desde cualquier hilo.
+    func setRMS(_ rms: Float) {
+        let db = 20 * log10(max(rms, 0) + 1e-6)
+        inputLock.lock()
+        loudnessInput = db
+        inputLock.unlock()
+    }
+
     /// Empieza una grabación desde cero. Se puede llamar desde cualquier hilo.
     func restart() {
         queue.async { self.resetState() }
@@ -321,6 +374,9 @@ final class DotScopeSimulation: @unchecked Sendable {
 
     private func resetState() {
         let fresh = DotScopeSimulation()
+        inputLock.lock()
+        loudnessInput = -120
+        inputLock.unlock()
         stage = .recording
         elapsed = 0
         flowOffset = 0
@@ -361,7 +417,7 @@ final class DotScopeSimulation: @unchecked Sendable {
     }
 
     /// Avanza hasta `date`. `level` es el nivel de la voz, de 0 a 1.
-    func advance(to date: Date, stage newStage: DotScopeStage, level: Float, reduceMotion: Bool = false) {
+    func advance(to date: Date, stage newStage: DotScopeStage, reduceMotion: Bool = false) {
         let dt = Float(lastDate.map { date.timeIntervalSince($0) } ?? 0)
         lastDate = date
         reducedMotion = reduceMotion
@@ -378,7 +434,7 @@ final class DotScopeSimulation: @unchecked Sendable {
         pending += min(max(dt, 0), 0.25)
         while pending >= step {
             pending -= step
-            advanceStep(level: level, reduceMotion: reduceMotion)
+            advanceStep(reduceMotion: reduceMotion)
         }
     }
 
@@ -392,10 +448,19 @@ final class DotScopeSimulation: @unchecked Sendable {
         flowSpeed * DotScopeTuning.helixCycles / max(width.x, 1)
     }
 
-    private func advanceStep(level raw: Float, reduceMotion: Bool) {
+    private func advanceStep(reduceMotion: Bool) {
         let h = step
         let recording = stage == .recording
-        let level = recording ? min(max(raw * DotScopeTuning.gain, 0), 1) : 0
+        let level: Float
+        if recording {
+            inputLock.lock()
+            let loudness = loudnessInput
+            inputLock.unlock()
+            let raw = auto.step(loudness, h: h, release: DotScopeTuning.autoRelease, noiseFloor: DotScopeTuning.noiseFloor)
+            level = min(max(raw * DotScopeTuning.gain, 0), 1)
+        } else {
+            level = 0
+        }
         voices[0].step(raw: level, h: h)
         voices[1].step(raw: level * 0.85, h: h)
         live += ((recording ? 1 : 0) - live) * (1 - exp(-h / 0.55))
@@ -678,7 +743,6 @@ struct DotScopePalette {
 /// Lo que la vista pide a la simulación; se comparte entre el hilo principal y el de dibujo.
 private struct DotScopeInputs {
     var stage: DotScopeStage = .recording
-    var level: Float = 0
     var vertical = false
     var dark = true
     var reduceMotion = false
@@ -714,9 +778,9 @@ final class DotScopeLayerView: NSView, @unchecked Sendable {
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    func update(stage: DotScopeStage, level: Float, vertical: Bool, dark: Bool, reduceMotion: Bool) {
+    func update(stage: DotScopeStage, vertical: Bool, dark: Bool, reduceMotion: Bool) {
         lock.lock()
-        inputs = DotScopeInputs(stage: stage, level: level, vertical: vertical, dark: dark, reduceMotion: reduceMotion)
+        inputs = DotScopeInputs(stage: stage, vertical: vertical, dark: dark, reduceMotion: reduceMotion)
         lock.unlock()
     }
 
@@ -754,7 +818,7 @@ final class DotScopeLayerView: NSView, @unchecked Sendable {
         lock.lock()
         let current = inputs
         lock.unlock()
-        simulation.advance(to: Date(), stage: current.stage, level: current.level, reduceMotion: current.reduceMotion)
+        simulation.advance(to: Date(), stage: current.stage, reduceMotion: current.reduceMotion)
         guard let image = render(current) else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -900,8 +964,6 @@ final class DotScopeLayerView: NSView, @unchecked Sendable {
 struct DotScopeView: NSViewRepresentable {
     let simulation: DotScopeSimulation
     let stage: DotScopeStage
-    /// Nivel de la voz de 0 a 1 (el que ya normaliza AudioRecorder).
-    let level: Float
     /// En los bordes laterales la isla va en vertical: se dibuja girada 90°.
     var vertical = false
     var dark = true
@@ -914,7 +976,7 @@ struct DotScopeView: NSViewRepresentable {
     }
 
     func updateNSView(_ view: DotScopeLayerView, context: Context) {
-        view.update(stage: stage, level: level, vertical: vertical, dark: dark, reduceMotion: reduceMotion)
+        view.update(stage: stage, vertical: vertical, dark: dark, reduceMotion: reduceMotion)
     }
 
     /// El lienzo es algo más grande que la placa (por la sombra), pero ocupa lo que la placa.
