@@ -5,6 +5,7 @@ struct FreeFlowTests {
     static func main() async {
         AppContextServiceTests.run()
         await LLMAPITransportTests.run()
+        await GroqDirectTransportTests.run()
         TemperatureCapabilityCacheTests.run()
         ModelConfigurationTests.run()
         RecordingCaptureTimingTests.run()

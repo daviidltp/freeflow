@@ -36,6 +36,8 @@ private func bodyData(_ request: URLRequest) -> Data? {
 
 enum LLMAPITransportTests {
     static func run() async {
+        await networkFallbackTests()
+        await rememberedBlockTests()
         func perform(_ replies: [(Int, String)], body payload: [String: Any] = ["model": "fixture", "temperature": 0, "top_p": 0.7, "max_completion_tokens": 128, "messages": []], endpoint: String = UUID().uuidString, cache: TemperatureCapabilityCache = TemperatureCapabilityCache(defaults: UserDefaults(suiteName: "transport-\(UUID().uuidString)")!)) async throws -> [URLRequest] {
             StubLLMURLProtocol.requests = []
             var remaining = replies
@@ -142,5 +144,176 @@ enum LLMAPITransportTests {
             let nextBody = try! JSONSerialization.jsonObject(with: bodyData(next[0])!) as! [String: Any]
             TestSupport.expect(next.count == 1 && nextBody["temperature"] != nil, "\(label) errors do not poison capability cache")
         }
+    }
+}
+
+extension LLMAPITransportTests {
+    private static let blocked = Data(#"{"error":{"message":"Access denied. Please check your network settings."}}"#.utf8)
+
+    private static func stubSession() -> URLSession {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [StubLLMURLProtocol.self]
+        return URLSession(configuration: config)
+    }
+
+    private static func groqRequest(timeout: TimeInterval = 12) -> URLRequest {
+        var request = URLRequest(url: URL(string: "https://api.groq.com/openai/v1/chat/completions")!, timeoutInterval: timeout)
+        request.httpMethod = "POST"
+        request.httpBody = Data(#"{"model":"fixture","temperature":0,"messages":[]}"#.utf8)
+        request.setValue("Bearer synthetic-token", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        return request
+    }
+
+    private static func response(_ request: URLRequest, _ status: Int, _ body: Data) -> (Data, URLResponse) {
+        (body, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
+    }
+
+    private static func freshCache() -> TemperatureCapabilityCache {
+        TemperatureCapabilityCache(defaults: UserDefaults(suiteName: "vpn-tests-\(UUID().uuidString)")!)
+    }
+
+    static func networkFallbackTests() async {
+        let session = stubSession()
+        defer { session.invalidateAndCancel() }
+        let cache = freshCache()
+        let request = groqRequest()
+        StubLLMURLProtocol.handler = { _ in (403, blocked) }
+        var directRequests: [URLRequest] = []
+        let direct: LLMAPITransport.DirectTransport = { outgoing, body in
+            TestSupport.expect(body == nil, "Data fallback uses original request body")
+            directRequests.append(outgoing)
+            return response(outgoing, 401, Data())
+        }
+        let memory = GroqRouteMemory()
+        let result = try! await LLMAPITransport.data(for: request, using: session, cache: cache, direct: direct, memory: memory)
+        TestSupport.expect((result.1 as? HTTPURLResponse)?.statusCode == 401 && directRequests.count == 1, "Groq network block reaches direct route once")
+        TestSupport.expect(memory.isBlocked, "Observed Groq network block is remembered")
+        TestSupport.expect(directRequests[0].httpBody == request.httpBody && directRequests[0].allHTTPHeaderFields == request.allHTTPHeaderFields && directRequests[0].httpMethod == "POST", "Fallback preserves body, method and headers")
+        TestSupport.expect(directRequests[0].timeoutInterval > 0 && directRequests[0].timeoutInterval <= 12, "Fallback shares original timeout budget")
+        for url in ["http://api.groq.com/test", "https://other.invalid/test", "https://api.groq.com.evil.invalid/test", "https://api.groq.com:444/test"] {
+            var other = request
+            other.url = URL(string: url)!
+            let otherMemory = GroqRouteMemory()
+            let original = try! await LLMAPITransport.data(for: other, using: session, cache: cache, direct: { _, _ in fatalError("Unsafe fallback") }, memory: otherMemory)
+            TestSupport.expect((original.1 as? HTTPURLResponse)?.statusCode == 403 && !otherMemory.isBlocked, "Other provider/scheme/port preserves original error")
+        }
+        for (status, body) in [(403, Data(#"{"error":{"message":"Key lacks permission"}}"#.utf8)), (401, blocked), (429, blocked), (403, Data("Access denied. Please check your network settings.".utf8))] {
+            StubLLMURLProtocol.handler = { _ in (status, body) }
+            let unrelatedMemory = GroqRouteMemory()
+            _ = try! await LLMAPITransport.data(for: request, using: session, cache: cache, direct: { _, _ in fatalError("Unrelated error bypassed VPN") }, memory: unrelatedMemory)
+            TestSupport.expect(!unrelatedMemory.isBlocked, "Unrelated errors are not remembered as a network block")
+        }
+        StubLLMURLProtocol.handler = { _ in (403, blocked) }
+        var attempts = 0
+        let repeatedMemory = GroqRouteMemory()
+        do {
+            _ = try await LLMAPITransport.data(for: request, using: session, cache: cache, direct: { outgoing, _ in
+                attempts += 1
+                return response(outgoing, 403, blocked)
+            }, memory: repeatedMemory)
+            fatalError("Repeated block must report network failure")
+        } catch {
+            TestSupport.expect(error is GroqDirectTransport.NetworkBlocked && attempts == 1, "Repeated block stops once with network-specific error")
+            TestSupport.expect(!error.localizedDescription.contains("key"), "Network block must not blame key permissions")
+            TestSupport.expect(!repeatedMemory.isBlocked, "A block on the direct route too is not remembered")
+        }
+        let audio = Data([0, 1, 255, 13, 10])
+        let upload = try! await LLMAPITransport.upload(for: request, from: audio, using: session, direct: { outgoing, body in
+            TestSupport.expect(body == audio && outgoing.allHTTPHeaderFields == request.allHTTPHeaderFields, "Upload fallback preserves binary multipart payload and headers")
+            return response(outgoing, 200, Data("synthetic transcript".utf8))
+        }, memory: GroqRouteMemory())
+        TestSupport.expect((upload.1 as? HTTPURLResponse)?.statusCode == 200, "Upload uses fallback")
+        attempts = 0
+        let rejected = Data(#"{"error":{"code":"unsupported_parameter","param":"temperature","message":"temperature is unsupported"}}"#.utf8)
+        let success = Data(#"{"choices":[{"message":{"content":"OK"}}]}"#.utf8)
+        StubLLMURLProtocol.requests = []
+        _ = try! await LLMAPITransport.data(for: request, using: session, cache: cache, direct: { outgoing, _ in
+            attempts += 1
+            let json = try! JSONSerialization.jsonObject(with: outgoing.httpBody!) as! [String: Any]
+            TestSupport.expect((json["temperature"] != nil) == (attempts == 1), "Temperature retry works after switching route")
+            return response(outgoing, attempts == 1 ? 400 : 200, attempts == 1 ? rejected : success)
+        }, memory: GroqRouteMemory())
+        TestSupport.expect(attempts == 2 && StubLLMURLProtocol.requests.count == 1 && cache.capability(for: request) == .unsupported, "Temperature cache survives direct route retry without a second VPN attempt")
+        do {
+            _ = try await LLMAPITransport.data(for: request, using: session, cache: freshCache(), direct: { _, _ in throw URLError(.timedOut) }, memory: GroqRouteMemory())
+            fatalError("Timeout must propagate")
+        } catch {
+            TestSupport.expect((error as? URLError)?.code == .timedOut, "Direct timeout remains timeout")
+        }
+        var entered: AsyncStream<Void>.Continuation!
+        let started = AsyncStream<Void> { entered = $0 }
+        let cancelled = Task {
+            _ = try await LLMAPITransport.data(for: request, using: session, cache: freshCache(), direct: { _, _ in
+                entered.yield(())
+                try await Task.sleep(nanoseconds: 30_000_000_000)
+                fatalError("Cancelled fallback continued")
+            }, memory: GroqRouteMemory())
+        }
+        for await _ in started { break }
+        cancelled.cancel()
+        entered.finish()
+        do { try await cancelled.value; fatalError("Cancellation lost") }
+        catch { TestSupport.expect(error is CancellationError || (error as? URLError)?.code == .cancelled, "Cancellation propagates") }
+        var foreign = request
+        foreign.url = URL(string: "https://other.invalid")!
+        do { _ = try await GroqDirectTransport.send(foreign, body: nil); fatalError("Foreign host reached direct route") }
+        catch { TestSupport.expect(error is GroqDirectTransport.NetworkBlocked, "Direct adapter enforces host independently") }
+    }
+
+    /// Once Groq blocked the default path, later operations must not pay for a
+    /// doomed upload through the VPN before going direct.
+    static func rememberedBlockTests() async {
+        let session = stubSession()
+        defer { session.invalidateAndCancel() }
+        let request = groqRequest()
+        let memory = GroqRouteMemory()
+        StubLLMURLProtocol.handler = { _ in (403, blocked) }
+        StubLLMURLProtocol.requests = []
+        var directCalls = 0
+        let direct: LLMAPITransport.DirectTransport = { outgoing, _ in
+            directCalls += 1
+            return response(outgoing, 200, Data("ok".utf8))
+        }
+        _ = try! await LLMAPITransport.upload(for: request, from: Data([1, 2, 3]), using: session, direct: direct, memory: memory)
+        TestSupport.expect(StubLLMURLProtocol.requests.count == 1 && directCalls == 1 && memory.isBlocked, "First operation probes default route, then goes direct and remembers")
+        _ = try! await LLMAPITransport.upload(for: request, from: Data([4, 5, 6]), using: session, direct: direct, memory: memory)
+        _ = try! await LLMAPITransport.data(for: request, using: session, cache: freshCache(), direct: direct, memory: memory)
+        TestSupport.expect(StubLLMURLProtocol.requests.count == 1 && directCalls == 3, "Later uploads and completions skip the blocked default route")
+
+        // Direct route stops working (network changed, VPN gone): forget and use default route.
+        StubLLMURLProtocol.handler = { _ in (200, Data("default".utf8)) }
+        StubLLMURLProtocol.requests = []
+        let recovered = try! await LLMAPITransport.data(for: request, using: session, cache: freshCache(), direct: { _, _ in
+            throw URLError(.networkConnectionLost)
+        }, memory: memory)
+        TestSupport.expect(String(data: recovered.0, encoding: .utf8) == "default" && StubLLMURLProtocol.requests.count == 1 && !memory.isBlocked, "Failing remembered route falls back to default route and is forgotten")
+
+        // Remembered route answers with the block itself: forget it and probe again.
+        memory.markBlocked()
+        StubLLMURLProtocol.requests = []
+        var blockedDirectCalls = 0
+        let probed = try! await LLMAPITransport.data(for: request, using: session, cache: freshCache(), direct: { outgoing, _ in
+            blockedDirectCalls += 1
+            return response(outgoing, 403, blocked)
+        }, memory: memory)
+        TestSupport.expect((probed.1 as? HTTPURLResponse)?.statusCode == 200 && blockedDirectCalls == 1 && StubLLMURLProtocol.requests.count == 1 && !memory.isBlocked, "Blocked remembered route is forgotten and default route used")
+
+        // A timeout on the remembered route spends the budget: no second attempt.
+        memory.markBlocked()
+        StubLLMURLProtocol.requests = []
+        do {
+            _ = try await LLMAPITransport.data(for: request, using: session, cache: freshCache(), direct: { _, _ in throw URLError(.timedOut) }, memory: memory)
+            fatalError("Remembered timeout must propagate")
+        } catch {
+            TestSupport.expect((error as? URLError)?.code == .timedOut && StubLLMURLProtocol.requests.isEmpty, "Remembered route timeout propagates without default retry")
+        }
+
+        // Other providers never use the memory.
+        var other = request
+        other.url = URL(string: "https://provider.invalid/v1/chat/completions")!
+        StubLLMURLProtocol.requests = []
+        _ = try! await LLMAPITransport.data(for: other, using: session, cache: freshCache(), direct: { _, _ in fatalError("Other provider went direct") }, memory: memory)
+        TestSupport.expect(StubLLMURLProtocol.requests.count == 1, "Other providers ignore remembered Groq block")
     }
 }
