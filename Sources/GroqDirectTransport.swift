@@ -251,7 +251,8 @@ final class GroqDirectConnectionPool: @unchecked Sendable {
 
     /// Opens one connection in the background if none is ready to reuse.
     func prewarm() {
-        queue.async {
+        queue.async { [weak self] in
+            guard let self else { return }
             let now = Date()
             let hasFresh = self.idle.contains {
                 now.timeIntervalSince($0.openedAt) < self.idleLifetime / 2
