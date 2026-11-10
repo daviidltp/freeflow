@@ -103,10 +103,15 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
     /// 16 kHz mono PCM16 WAV file independently for upload-based transcription.
     var onPCM16Samples: ((Data) -> Void)?
     /// Recibe el RMS de cada bloque de audio en la cola de captura (para el indicador de puntos).
-    private let rmsHandlerLock = OSAllocatedUnfairLock<(@Sendable (Float) -> Void)?>(initialState: nil)
+    /// The closure lives inside a struct: stored directly as the lock's generic
+    /// state, every read re-wrapped it in another thunk, so each audio block
+    /// made the next call one level deeper until a long dictation overflowed
+    /// the capture thread's stack.
+    private struct RMSHandler: Sendable { let call: @Sendable (Float) -> Void }
+    private let rmsHandlerLock = OSAllocatedUnfairLock<RMSHandler?>(initialState: nil)
 
     func setRMSHandler(_ handler: (@Sendable (Float) -> Void)?) {
-        rmsHandlerLock.withLock { $0 = handler }
+        rmsHandlerLock.withLock { $0 = handler.map(RMSHandler.init) }
     }
     private let recordingConverterLock = OSAllocatedUnfairLock<AVAudioConverter?>(initialState: nil)
     private let pcm16ConverterLock = OSAllocatedUnfairLock<AVAudioConverter?>(initialState: nil)
@@ -893,7 +898,7 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
         }
 
         let rms = updateAudioLevel(from: sampleBuffer)
-        rmsHandlerLock.withLock { $0 }?(rms)
+        rmsHandlerLock.withLock { $0 }?.call(rms)
         if count <= Self.sampleRateLogLimit {
             let elapsed = (CFAbsoluteTimeGetCurrent() - recordingStartTime) * 1000
             os_log(.info, log: recordingLog, "buffer #%d at %.3fms, rms=%.6f", count, elapsed, rms)
