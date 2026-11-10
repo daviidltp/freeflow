@@ -21,7 +21,9 @@ TEST_PRODUCTION_SOURCES = \
 	Sources/AppTextInsertionTarget.swift \
 	Sources/ContextInferenceFailure.swift \
 	Sources/DictationStats.swift \
+	Sources/GroqDirectTransport.swift \
 	Sources/GroqUsage.swift \
+	Sources/HTTP1Codec.swift \
 	Sources/LLMAPITransport.swift \
 	Sources/LLMCooldownManager.swift \
 	Sources/ModelConfiguration.swift \
