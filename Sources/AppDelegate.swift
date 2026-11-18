@@ -11,6 +11,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ProcessInfo.processInfo.disableAutomaticTermination("FreeFlow vive en la barra de menús")
         ProcessInfo.processInfo.disableSuddenTermination()
 
+        applyIdleDockPolicy()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleDefaultsChanged),
+            name: UserDefaults.didChangeNotification,
+            object: nil
+        )
+
         NetworkMonitor.shared.start()
         WisprFonts.registerIfNeeded()
         if appState.transcriptionEngine == .parakeet {
@@ -92,10 +100,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     self.appState.hasCompletedSetup = true
                     self.appState.startHotkeyMonitoring()
                     self.appState.startAccessibilityPolling()
-                    NSApp.setActivationPolicy(.accessory)
                 }
                 self.setupWindow = nil
+                self.applyIdleDockPolicy()
             }
+        }
+    }
+
+    /// Sin ventanas abiertas: fuera del Dock o en el Dock, según el ajuste «Ocultar del Dock».
+    private func applyIdleDockPolicy() {
+        let hasOpenWindow = (settingsWindow?.isVisible ?? false) || setupWindow != nil
+        let showsInDock = DockIconPreference.showsInDock(
+            hasOpenWindow: hasOpenWindow,
+            hideWhenClosed: DockIconPreference.load(from: .standard)
+        )
+        let policy: NSApplication.ActivationPolicy = showsInDock ? .regular : .accessory
+        if NSApp.activationPolicy() != policy {
+            NSApp.setActivationPolicy(policy)
+        }
+    }
+
+    @objc private func handleDefaultsChanged() {
+        DispatchQueue.main.async { [weak self] in
+            self?.applyIdleDockPolicy()
         }
     }
 
@@ -152,9 +179,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.settingsWindow = nil
             // Fuera del willClose: cambiar la política aquí mismo puede cerrar la app entera.
             DispatchQueue.main.async {
-                if self?.setupWindow == nil {
-                    NSApp.setActivationPolicy(.accessory)
-                }
+                self?.applyIdleDockPolicy()
             }
         }
     }
@@ -192,7 +217,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         appState.overlayManager.refreshIdleIsland()
         setupWindow?.close()
         setupWindow = nil
-        NSApp.setActivationPolicy(.accessory)
+        applyIdleDockPolicy()
         appState.startHotkeyMonitoring()
         appState.startAccessibilityPolling()
         Task { @MainActor in
