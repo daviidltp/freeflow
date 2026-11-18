@@ -736,6 +736,7 @@ struct GeneralSettingsView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.openURL) private var openURL
     @AppStorage("show_menu_bar_icon") private var showMenuBarIcon = true
+    @AppStorage(DockIconPreference.storageKey) private var hideDockIconWhenClosed = DockIconPreference.defaultHidden
     @AppStorage("overlay_display_id") private var overlayDisplayID = 0
     @AppStorage(IdleIslandPreference.storageKey) private var showIdleIsland = true
     @AppStorage(RecordingTimerPreference.storageKey) private var showRecordingTimer = RecordingTimerPreference.defaultEnabled
@@ -1143,6 +1144,13 @@ struct GeneralSettingsView: View {
     private var startupSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Toggle("Icono en la barra de menús", isOn: $showMenuBarIcon)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Toggle("Ocultar del Dock al cerrar la ventana", isOn: $hideDockIconWhenClosed)
+                Text("La app sigue funcionando aunque cierres la ventana con la cruz.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             if SMAppService.mainApp.status == .requiresApproval {
                 HStack(spacing: 6) {

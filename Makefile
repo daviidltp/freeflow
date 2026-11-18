@@ -31,6 +31,7 @@ TEST_PRODUCTION_SOURCES = \
 	Sources/PipelineHistoryItem.swift \
 	Sources/PostProcessingService.swift \
 	Sources/RecordingCaptureTiming.swift \
+	Sources/DockIconPreference.swift \
 	Sources/RecordingTimerPreference.swift \
 	Sources/TranscriptionErrorPresentationCore.swift \
 	Sources/WritingStyle.swift \
