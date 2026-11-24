@@ -26,6 +26,7 @@ TEST_PRODUCTION_SOURCES = \
 	Sources/HTTP1Codec.swift \
 	Sources/LLMAPITransport.swift \
 	Sources/LLMCooldownManager.swift \
+	Sources/MicrophoneSelectionCore.swift \
 	Sources/ModelConfiguration.swift \
 	Sources/OriginalFieldInsertionPreference.swift \
 	Sources/PipelineHistoryItem.swift \

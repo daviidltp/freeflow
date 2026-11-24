@@ -776,7 +776,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
         let savedHistory = pipelineHistoryStore.loadAllHistory()
 
-        let selectedMicrophoneID = UserDefaults.standard.string(forKey: selectedMicrophoneStorageKey) ?? "default"
+        let selectedMicrophoneID = UserDefaults.standard.string(forKey: selectedMicrophoneStorageKey) ?? MicrophoneSelectionCore.automaticID
 
         self.contextService = Self.makeAppContextService(
             apiKey: apiKey,
@@ -2473,7 +2473,13 @@ final class AppState: ObservableObject, @unchecked Sendable {
         endCriticalDictationActivity()
         errorMessage = formattedRecordingStartError(error)
         statusText = "Error"
-        overlayManager.dismiss()
+        switch error as? AudioRecorderError {
+        case .silentMicrophone, .noAutomaticMicrophoneDeliveredAudio:
+            // Say why in the island instead of closing it silently.
+            overlayManager.showError(error.localizedDescription)
+        default:
+            overlayManager.dismiss()
+        }
         refreshAvailableMicrophonesIfNeeded()
     }
 

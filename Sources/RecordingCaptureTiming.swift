@@ -22,6 +22,16 @@ struct RecordingCaptureTiming {
         startedAt = instant
     }
 
+    /// False once the recording was stopped or cancelled.
+    var isActive: Bool { startedAt != nil }
+
+    /// Moves the start to a later instant when capture switches microphone
+    /// before any usable audio arrived. Cancelled or ready recordings keep theirs.
+    mutating func restartBeforeReady(at instant: ContinuousClock.Instant) {
+        guard startedAt != nil, !reportedReady else { return }
+        startedAt = instant
+    }
+
     /// Invalidates queued readiness callbacks before asynchronous shutdown begins.
     mutating func invalidate() {
         generation &+= 1

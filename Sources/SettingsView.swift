@@ -882,7 +882,8 @@ struct GeneralSettingsView: View {
 
     private var microphoneValue: String {
         let id = appState.selectedMicrophoneID
-        if id.isEmpty || id == "default" { return "El del sistema" }
+        if MicrophoneSelectionCore.isAutomatic(id) { return "Automático" }
+        if id.isEmpty || id == MicrophoneSelectionCore.systemDefaultID { return "El del sistema" }
         return appState.availableMicrophones.first { $0.uid == id }?.name ?? "El del sistema"
     }
 
@@ -956,7 +957,8 @@ struct GeneralSettingsView: View {
             SettingsRowDivider()
             SettingsRow("Micrófono", icon: "mic") {
                 SettingsMenu(microphoneValue) {
-                    Button("El del sistema") { appState.selectedMicrophoneID = "default" }
+                    Button("Automático") { appState.selectedMicrophoneID = MicrophoneSelectionCore.automaticID }
+                    Button("El del sistema") { appState.selectedMicrophoneID = MicrophoneSelectionCore.systemDefaultID }
                     ForEach(appState.availableMicrophones) { device in
                         Button(device.name) { appState.selectedMicrophoneID = device.uid }
                     }
