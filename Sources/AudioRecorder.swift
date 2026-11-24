@@ -443,7 +443,8 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
             startBufferWatchdog()
             return true
         }
-        return false
+        // A stop or cancel during the last attempt must not surface an error afterwards.
+        return !captureTiming.withLock { $0.isActive }
     }
 
     private func cancelWatchdog() {
