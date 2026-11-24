@@ -422,6 +422,8 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
     private func switchToNextFallbackDeviceLocked() -> Bool {
         guard let outputURL = tempFileURL else { return false }
         while !fallbackDevices.isEmpty {
+            // Stop or cancel already invalidated this recording; let its queued teardown finish.
+            guard captureTiming.withLock({ $0.isActive }) else { return true }
             let device = fallbackDevices.removeFirst()
             os_log(.info, log: recordingLog, "switching to next microphone: %{public}@ [uid=%{public}@]", device.localizedName, device.uniqueID)
             // Stop the silent device first so no buffer arrives without an output file,
@@ -430,13 +432,14 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
             _ = finishAudioFileLocked(discard: true)
             try? FileManager.default.removeItem(at: outputURL)
             receivedNonSilentAudio.withLock { $0 = false }
+            // Before starting: the new device may deliver sound inside startRunning().
+            captureTiming.withLock { $0.restartBeforeReady(at: .now) }
             do {
                 try makeSession(device: device, outputURL: outputURL)
             } catch {
                 os_log(.error, log: recordingLog, "could not open %{public}@: %{public}@", device.localizedName, error.localizedDescription)
                 continue
             }
-            captureTiming.withLock { $0.restartBeforeReady(at: .now) }
             startBufferWatchdog()
             return true
         }
@@ -720,9 +723,23 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
     }
 
     private func makeSession(deviceUID: String?, outputURL: URL) throws {
-        teardownSessionLocked()
         let device = try preferredCaptureDevice(for: deviceUID, reason: "initial start")
-        try makeSession(device: device, outputURL: outputURL)
+        do {
+            try makeSession(device: device, outputURL: outputURL)
+        } catch {
+            guard isAutomaticSelection else { throw error }
+            os_log(.error, log: recordingLog, "could not open %{public}@: %{public}@", device.localizedName, error.localizedDescription)
+            while !fallbackDevices.isEmpty {
+                let next = fallbackDevices.removeFirst()
+                do {
+                    try makeSession(device: next, outputURL: outputURL)
+                    return
+                } catch {
+                    os_log(.error, log: recordingLog, "could not open %{public}@: %{public}@", next.localizedName, error.localizedDescription)
+                }
+            }
+            throw AudioRecorderError.noAutomaticMicrophoneDeliveredAudio
+        }
     }
 
     private func makeSession(device: AVCaptureDevice, outputURL: URL) throws {
