@@ -34,6 +34,28 @@ enum RecordingCaptureTimingTests {
         testCancelledStartup()
         testSupersededStartup()
         testDuplicateStartup()
+        testRestartBeforeReady()
+    }
+
+    private static func testRestartBeforeReady() {
+        var timing = RecordingCaptureTiming()
+        let firstStart = ContinuousClock.now
+        timing.start(at: firstStart, generation: timing.prepare())
+        TestSupport.expectEqual(timing.recordingStartIfReady(rms: 0), nil)
+
+        // Switching to another microphone while still silent moves the start.
+        let switchedAt = firstStart.advanced(by: .seconds(3))
+        timing.restartBeforeReady(at: switchedAt)
+        TestSupport.expectEqual(timing.recordingStartIfReady(rms: 0.1)?.instant, switchedAt)
+
+        // Once ready, a later restart must not move the start.
+        timing.restartBeforeReady(at: switchedAt.advanced(by: .seconds(3)))
+        TestSupport.expectEqual(timing.recordingStartIfReady(rms: 0.1), nil)
+
+        // A cancelled recording must not be revived by a restart.
+        timing.invalidate()
+        timing.restartBeforeReady(at: switchedAt)
+        TestSupport.expectEqual(timing.recordingStartIfReady(rms: 0.1), nil)
     }
 
     private static func testInvalidationBeforeReadiness() {

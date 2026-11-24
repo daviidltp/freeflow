@@ -1,6 +1,8 @@
 import AVFoundation
 import CoreMedia
+import CoreAudio
 import Foundation
+import IOKit
 import os.log
 
 private let recordingLog = OSLog(subsystem: "com.zachlatta.freeflow", category: "Recording")
@@ -40,12 +42,84 @@ struct AudioDevice: Identifiable {
                 lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
             }
     }
+
+    /// Capture devices in the order «Automático» should try them.
+    fileprivate static func automaticCaptureDevices() -> [AVCaptureDevice] {
+        let devices = captureDevices()
+        let candidates = devices.map { device in
+            MicrophoneSelectionCore.Candidate(
+                uid: device.uniqueID,
+                name: device.localizedName,
+                transport: MicrophoneSelectionCore.transport(
+                    coreAudioTransportType: coreAudioTransportType(forUID: device.uniqueID)
+                )
+            )
+        }
+        let lidClosed = isLidClosed()
+        let ordered = MicrophoneSelectionCore.automaticOrder(candidates, isLidClosed: lidClosed)
+        os_log(
+            .info,
+            log: recordingLog,
+            "automatic microphone order (lid closed=%{public}@): %{public}@",
+            String(lidClosed),
+            ordered.map(\.name).joined(separator: ", ")
+        )
+        return ordered.compactMap { candidate in
+            devices.first { $0.uniqueID == candidate.uid }
+        }
+    }
+
+    private static func coreAudioTransportType(forUID uid: String) -> UInt32 {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var cfUID = uid as CFString
+        var deviceID = AudioObjectID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        let status = withUnsafeMutablePointer(to: &cfUID) { uidPointer in
+            AudioObjectGetPropertyData(
+                AudioObjectID(kAudioObjectSystemObject),
+                &address,
+                UInt32(MemoryLayout<CFString>.size),
+                uidPointer,
+                &size,
+                &deviceID
+            )
+        }
+        guard status == noErr, deviceID != kAudioObjectUnknown else { return 0 }
+
+        address.mSelector = kAudioDevicePropertyTransportType
+        var transportType: UInt32 = 0
+        size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &transportType) == noErr else {
+            return 0
+        }
+        return transportType
+    }
+
+    /// True when a MacBook lid is closed (external-display mode). Macs without a lid report false.
+    private static func isLidClosed() -> Bool {
+        let rootDomain = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))
+        guard rootDomain != IO_OBJECT_NULL else { return false }
+        defer { IOObjectRelease(rootDomain) }
+        let value = IORegistryEntryCreateCFProperty(
+            rootDomain,
+            "AppleClamshellState" as CFString,
+            kCFAllocatorDefault,
+            0
+        )?.takeRetainedValue()
+        return (value as? Bool) ?? false
+    }
 }
 
 enum AudioRecorderError: LocalizedError {
     case invalidInputFormat(String)
     case missingInputDevice
     case noAudioBuffersReceived
+    case silentMicrophone(String)
+    case noAutomaticMicrophoneDeliveredAudio
     case failedToCreateCaptureInput(String)
     case failedToStartCaptureSession(String)
     case failedToBeginFileRecording(String)
@@ -58,6 +132,10 @@ enum AudioRecorderError: LocalizedError {
             return "No audio input device available."
         case .noAudioBuffersReceived:
             return "No audio buffers were received from the selected microphone."
+        case .silentMicrophone(let name):
+            return "«\(name)» no da sonido. Elige otro micrófono en Ajustes."
+        case .noAutomaticMicrophoneDeliveredAudio:
+            return "Ningún micrófono da sonido. Conecta unos auriculares o abre la tapa."
         case .failedToCreateCaptureInput(let details):
             return "Could not open the selected microphone: \(details)"
         case .failedToStartCaptureSession(let details):
@@ -87,6 +165,11 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
     private var loggedCaptureFormat = false
     private var fileWriteError: Error?
     private var isSessionInterrupted = false
+    /// Remaining devices «Automático» may switch to if the current one stays silent.
+    private var fallbackDevices: [AVCaptureDevice] = []
+    private var isAutomaticSelection = false
+    private var currentDeviceName = ""
+    private let receivedNonSilentAudio = OSAllocatedUnfairLock(initialState: false)
 
     @Published var isRecording = false
     private let _recording = OSAllocatedUnfairLock(initialState: false)
@@ -133,7 +216,8 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
     }()
     private let captureTiming = OSAllocatedUnfairLock(initialState: RecordingCaptureTiming())
     private var failureReported = false
-    private static let watchdogTimeout: TimeInterval = 2.0
+    /// Time a microphone gets to deliver non-silent audio before it is treated as dead.
+    private static let watchdogTimeout: TimeInterval = 3.0
     private static let sampleRateLogLimit = 40
 
     override init() {
@@ -166,7 +250,21 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
         for requestedDeviceUID: String?,
         reason: String
     ) throws -> AVCaptureDevice {
-        guard let requestedDeviceUID, !requestedDeviceUID.isEmpty, requestedDeviceUID != "default" else {
+        fallbackDevices = []
+        isAutomaticSelection = false
+        if let requestedDeviceUID, MicrophoneSelectionCore.isAutomatic(requestedDeviceUID) {
+            var ordered = AudioDevice.automaticCaptureDevices()
+            guard !ordered.isEmpty else {
+                throw AudioRecorderError.missingInputDevice
+            }
+            let device = ordered.removeFirst()
+            isAutomaticSelection = true
+            fallbackDevices = ordered
+            os_log(.info, log: recordingLog, "%{public}@ — automatic selection: %{public}@ [uid=%{public}@]", reason, device.localizedName, device.uniqueID)
+            return device
+        }
+
+        guard let requestedDeviceUID, !requestedDeviceUID.isEmpty, requestedDeviceUID != MicrophoneSelectionCore.systemDefaultID else {
             guard let device = Self.defaultCaptureDevice() else {
                 throw AudioRecorderError.missingInputDevice
             }
@@ -290,15 +388,59 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
             }
 
             let count = self._bufferCount.withLock { $0 }
-            if count == baselineCount {
-                os_log(.error, log: recordingLog, "watchdog: no new buffers after %.1fs — giving up", Self.watchdogTimeout)
-                self.reportRecordingFailure(AudioRecorderError.noAudioBuffersReceived)
-            } else {
+            let isSilent = !self.receivedNonSilentAudio.withLock { $0 }
+            if count != baselineCount, !isSilent {
                 os_log(.info, log: recordingLog, "watchdog: %d new buffers after %.1fs — healthy", count - baselineCount, Self.watchdogTimeout)
+                return
             }
+
+            os_log(
+                .error,
+                log: recordingLog,
+                "watchdog: %{public}@ after %.1fs on %{public}@",
+                count == baselineCount ? "no new buffers" : "only silent buffers",
+                Self.watchdogTimeout,
+                self.currentDeviceName
+            )
+            if self.switchToNextFallbackDeviceLocked() { return }
+
+            let error: AudioRecorderError
+            if self.isAutomaticSelection {
+                error = .noAutomaticMicrophoneDeliveredAudio
+            } else if count == baselineCount {
+                error = .noAudioBuffersReceived
+            } else {
+                error = .silentMicrophone(self.currentDeviceName)
+            }
+            self.reportRecordingFailure(error)
         }
         timer.resume()
         watchdogTimer = timer
+    }
+
+    /// Moves an automatic recording to the next candidate microphone. Runs on the session queue.
+    private func switchToNextFallbackDeviceLocked() -> Bool {
+        guard let outputURL = tempFileURL else { return false }
+        while !fallbackDevices.isEmpty {
+            let device = fallbackDevices.removeFirst()
+            os_log(.info, log: recordingLog, "switching to next microphone: %{public}@ [uid=%{public}@]", device.localizedName, device.uniqueID)
+            // Stop the silent device first so no buffer arrives without an output file,
+            // then drop the silent audio captured so far; the new session rewrites the file.
+            teardownSessionLocked()
+            _ = finishAudioFileLocked(discard: true)
+            try? FileManager.default.removeItem(at: outputURL)
+            receivedNonSilentAudio.withLock { $0 = false }
+            do {
+                try makeSession(device: device, outputURL: outputURL)
+            } catch {
+                os_log(.error, log: recordingLog, "could not open %{public}@: %{public}@", device.localizedName, error.localizedDescription)
+                continue
+            }
+            captureTiming.withLock { $0.restartBeforeReady(at: .now) }
+            startBufferWatchdog()
+            return true
+        }
+        return false
     }
 
     private func cancelWatchdog() {
@@ -579,8 +721,12 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
 
     private func makeSession(deviceUID: String?, outputURL: URL) throws {
         teardownSessionLocked()
-
         let device = try preferredCaptureDevice(for: deviceUID, reason: "initial start")
+        try makeSession(device: device, outputURL: outputURL)
+    }
+
+    private func makeSession(device: AVCaptureDevice, outputURL: URL) throws {
+        teardownSessionLocked()
 
         let session = AVCaptureSession()
         let dataOutput = AVCaptureAudioDataOutput()
@@ -637,6 +783,9 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
             fileWriteError = nil
         }
         installSessionObservers(for: session)
+        currentDeviceName = device.localizedName
+        // Set before starting: a fallback switch receives buffers while already recording.
+        tempFileURL = outputURL
 
         os_log(.info, log: recordingLog, "configured capture session with device %{public}@ [uid=%{public}@]", device.localizedName, device.uniqueID)
 
@@ -646,7 +795,6 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
         }
 
         os_log(.info, log: recordingLog, "capture session running with device %{public}@ [uid=%{public}@]", device.localizedName, device.uniqueID)
-        tempFileURL = outputURL
     }
 
     /// Called before scheduling capture setup so cancellation also invalidates pending starts.
@@ -660,6 +808,7 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
         recordingStartTime = t0
         _bufferCount.withLock { $0 = 0 }
         failureReported = false
+        receivedNonSilentAudio.withLock { $0 = false }
         liveLevelNormalizerLock.withLock { $0.reset() }
 
         os_log(.info, log: recordingLog, "startRecording() entered")
@@ -898,6 +1047,9 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
         }
 
         let rms = updateAudioLevel(from: sampleBuffer)
+        if rms > 0 {
+            receivedNonSilentAudio.withLock { $0 = true }
+        }
         rmsHandlerLock.withLock { $0 }?.call(rms)
         if count <= Self.sampleRateLogLimit {
             let elapsed = (CFAbsoluteTimeGetCurrent() - recordingStartTime) * 1000
