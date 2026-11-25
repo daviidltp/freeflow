@@ -46,11 +46,12 @@ enum MicrophoneSelectionCore {
         }
     }
 
-    /// Order in which «Automático» tries microphones: headsets first, then the
-    /// MacBook microphone while the lid is open, then anything else, then the
-    /// iPhone through Continuity. Aggregate and virtual devices are never used.
-    /// The built-in microphone stays as a last resort with the lid closed,
-    /// because macOS still lists it but it only delivers silence.
+    /// Order in which «Automático» tries microphones: the MacBook microphone
+    /// while the lid is open (it starts instantly; a Bluetooth headset needs
+    /// about a second to switch profiles), then headsets, then anything else,
+    /// then the iPhone through Continuity. Aggregate and virtual devices are
+    /// never used. The built-in microphone stays as a last resort with the lid
+    /// closed, because macOS still lists it but it only delivers silence.
     static func automaticOrder(_ candidates: [Candidate], isLidClosed: Bool) -> [Candidate] {
         candidates.enumerated()
             .compactMap { index, candidate -> (rank: Int, index: Int, candidate: Candidate)? in
@@ -65,10 +66,10 @@ enum MicrophoneSelectionCore {
 
     private static func rank(_ transport: Transport, isLidClosed: Bool) -> Int? {
         switch transport {
-        case .bluetooth, .usb:
-            return 0
         case .builtIn:
-            return isLidClosed ? 4 : 1
+            return isLidClosed ? 4 : 0
+        case .bluetooth, .usb:
+            return 1
         case .other:
             return 2
         case .continuity:
