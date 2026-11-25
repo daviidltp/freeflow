@@ -5,6 +5,7 @@ enum MicrophoneSelectionCoreTests {
         testTransportMapping()
         testLidClosedPrefersHeadsetAndSkipsAggregate()
         testLidOpenWithoutHeadsetUsesBuiltIn()
+        testLidOpenPrefersBuiltInOverHeadset()
         testContinuityOnlyWhenNothingElse()
         testOnlyAggregateLeavesNothing()
     }
@@ -42,6 +43,12 @@ enum MicrophoneSelectionCoreTests {
     private static func testLidOpenWithoutHeadsetUsesBuiltIn() {
         let order = Core.automaticOrder([aggregate, phone, display, builtIn], isLidClosed: false)
         TestSupport.expectEqual(order.map(\.uid), ["BuiltIn", "display", "phone"])
+    }
+
+    private static func testLidOpenPrefersBuiltInOverHeadset() {
+        // A Bluetooth headset takes about a second to start its microphone.
+        let order = Core.automaticOrder([headset, phone, builtIn], isLidClosed: false)
+        TestSupport.expectEqual(order.map(\.uid), ["BuiltIn", "headset", "phone"])
     }
 
     private static func testContinuityOnlyWhenNothingElse() {
