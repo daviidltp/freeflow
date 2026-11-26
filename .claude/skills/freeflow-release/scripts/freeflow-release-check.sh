@@ -1,0 +1,1 @@
+../../../../.github/scripts/freeflow-release-check.sh

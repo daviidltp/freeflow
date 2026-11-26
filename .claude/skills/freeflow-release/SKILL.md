@@ -68,7 +68,7 @@ Every release prep must update `CHANGELOG.md` by comparing the previous public s
 5. Validate locally before commit/tag:
    ```bash
    .github/scripts/changelog-section.sh <version>
-   .agents/skills/freeflow-release/scripts/freeflow-release-check.sh <version>
+   .claude/skills/freeflow-release/scripts/freeflow-release-check.sh <version>
    git diff --check
    make clean
    make ARCH="$(uname -m)" CODESIGN_IDENTITY=-
@@ -102,4 +102,4 @@ Every release prep must update `CHANGELOG.md` by comparing the previous public s
 
 ## Helper Script
 
-Run `.agents/skills/freeflow-release/scripts/freeflow-release-check.sh <version>` from the FreeFlow repo root to check release preconditions. It validates semver shape, required files, changelog extraction, workflow trigger basics, and tag availability.
+Run `.claude/skills/freeflow-release/scripts/freeflow-release-check.sh <version>` from the FreeFlow repo root to check release preconditions. It validates semver shape, required files, changelog extraction, workflow trigger basics, and tag availability.
