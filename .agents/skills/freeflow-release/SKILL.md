@@ -81,11 +81,17 @@ Every release prep must update `CHANGELOG.md` by comparing the previous public s
    ```
    Include other files only when they are deliberately part of the release prep.
 
-7. After user approval, tag and push:
+7. Open a release PR from a branch. Review it with Sol and wait for green checks
+   and David's approval of the version and changelog. Squash-merge the PR after
+   approval. Merging to `main` also starts the development release workflow.
+   Tag the exact squash commit so the release contains the approved changes.
+   Set `release_pr` to the merged PR number and `release_version` to the approved
+   version without the leading `v`.
    ```bash
-   git tag v<version>
-   git push origin main
-   git push origin v<version>
+   git fetch origin main
+   release_sha=$(gh pr view "$release_pr" --json mergeCommit --jq .mergeCommit.oid)
+   git tag "v$release_version" "$release_sha"
+   git push origin "refs/tags/v$release_version"
    ```
 
 8. After GitHub Actions finishes, verify:
