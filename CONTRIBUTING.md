@@ -24,7 +24,7 @@ FreeFlow is a macOS app built with Swift and the macOS SDK. To build and test lo
    git remote add upstream https://github.com/zachlatta/freeflow.git
    ```
 
-3. Keep your fork in sync with upstream before starting new work:
+3. To synchronize your own contributor fork with upstream, use the commands below. For changes to this FreeFlow fork, follow its [branch and publication rules](docs/CODE_GUIDELINES.md).
 
    ```bash
    git fetch upstream
@@ -59,18 +59,7 @@ make ARCH=universal
 
 ## Testing
 
-```bash
-make check
-git diff --check
-```
-
-`make check` type-checks production Swift, compiles and runs the standalone tests, validates plist files, and checks shell scripts and YAML. It requires no simulator, test host, API key, or live provider. A full app build is normally unnecessary.
-
-Add focused regression tests in `Tests/` for deterministic bug fixes. List any additional production files needed by tests in the Makefile's `TEST_PRODUCTION_SOURCES`. Production app sources are discovered automatically.
-
-Use synthetic fixtures and mocked or local dependencies. Never include real audio, transcripts, screenshots, clipboard contents, app context, credentials, or private provider URLs in tests or reports.
-
-Changes involving microphone capture, global shortcuts, Accessibility, Screen Recording, clipboard/paste behavior, updates, or the signed app need documented manual verification before merge. Automated checks alone do not verify these flows. If that testing is pending, open a draft PR with exact steps and expected results. Do not trigger permission prompts or change system permissions without the tester's approval.
+Follow the [test guide](docs/TESTING.md) for the automated checks, fixtures and flows that need manual verification. In a draft with manual testing pending, list the exact steps and expected results.
 
 ## Development Conventions
 
@@ -94,11 +83,11 @@ Write clear, concise commit messages in the imperative mood (e.g., "Add preserve
 
 ### Releases
 
-Do not change versions, release notes, signing, notarization, or release workflows during ordinary maintenance. Coordinate release work with a maintainer. See [AGENTS.md](AGENTS.md) for the repository's verification and privacy requirements.
+Coordinate release work with a maintainer. Follow the [release guide](docs/RELEASE.md) for what belongs in a release.
 
 ## Submitting Changes
 
-1. Open a [pull request](https://github.com/zachlatta/freeflow/compare) against `zachlatta/freeflow:main`.
+1. For an upstream contribution, open a [pull request](https://github.com/zachlatta/freeflow/compare) against `zachlatta/freeflow:main`. For this fork, follow its [branch and publication rules](docs/CODE_GUIDELINES.md).
 2. Include a description that covers:
    - **Summary** — what the PR does, in a sentence or two.
    - **Motivation** — why the change is needed (link the issue if one exists, e.g., `Closes #123`).
