@@ -2,7 +2,7 @@
 
 Dictado nativo para macOS, construido con Swift y Make.
 
-Para arrancar, sigue el [README](README.md#instalar-en-macos). Verifica con `make check` y `git diff --check`.
+Para arrancar, sigue el [README](README.md#instalar-en-macos). Comprueba el cambio con la [guía de pruebas](docs/TESTING.md).
 
 | Si vas a… | Lee… |
 | --- | --- |
