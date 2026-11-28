@@ -173,14 +173,29 @@ class TranscriptionService {
 
     // Send audio file for transcription and return text
     private func transcribeAudio(fileURL: URL) async throws -> String {
-        let text = try await transcribeAudioWithURLSession(fileURL: fileURL, vocabularyPrompt: vocabularyPrompt)
+        let first = try await transcribeAudioWithURLSession(fileURL: fileURL, vocabularyPrompt: vocabularyPrompt)
+        guard let vocabularyPrompt else { return first.text }
         // Whisper a veces repite la pista de vocabulario ("Glosario: Claude, Codex…") en vez de
         // transcribir. Si pasa, se vuelve a pedir sin la pista.
-        if let vocabularyPrompt, Self.looksLikePromptEcho(text, prompt: vocabularyPrompt) {
+        if Self.looksLikePromptEcho(first.text, prompt: vocabularyPrompt) {
             os_log(.info, log: transcriptionLog, "transcript looks like an echo of the vocabulary prompt; retrying without it")
-            return try await transcribeAudioWithURLSession(fileURL: fileURL, vocabularyPrompt: nil)
+            return try await transcribeAudioWithURLSession(fileURL: fileURL, vocabularyPrompt: nil).text
         }
-        return text
+        // Con la pista, Whisper a veces se salta un trozo largo de lo dicho. Se pide otra vez
+        // sin ella y se queda la versión que conserva más texto.
+        if first.skippedSpeech {
+            os_log(.info, log: transcriptionLog, "transcript looks like it skipped speech; retrying without the vocabulary prompt")
+            guard let retry = try? await transcribeAudioWithURLSession(fileURL: fileURL, vocabularyPrompt: nil) else {
+                return first.text
+            }
+            return Self.preferredTranscript(original: first.text, retry: retry.text)
+        }
+        return first.text
+    }
+
+    /// Entre la transcripción original y la repetida sin pista, la que conserva más palabras.
+    static func preferredTranscript(original: String, retry: String) -> String {
+        TranscriptionResponseParser.wordCount(retry) > TranscriptionResponseParser.wordCount(original) ? retry : original
     }
 
     /// Si `text` es la pista de vocabulario repetida: menciona "Glosario" o casi todas sus
@@ -207,7 +222,10 @@ class TranscriptionService {
         return Double(matches.count) / Double(content.count) >= 0.75
     }
 
-    private func transcribeAudioWithURLSession(fileURL: URL, vocabularyPrompt: String?) async throws -> String {
+    private func transcribeAudioWithURLSession(
+        fileURL: URL,
+        vocabularyPrompt: String?
+    ) async throws -> (text: String, skippedSpeech: Bool) {
         let url = baseURL
             .appendingPathComponent("audio")
             .appendingPathComponent("transcriptions")
@@ -248,7 +266,11 @@ class TranscriptionService {
         }
     }
 
-    private func validateTranscriptionResponse(data: Data, response: URLResponse, fileURL: URL) throws -> String {
+    private func validateTranscriptionResponse(
+        data: Data,
+        response: URLResponse,
+        fileURL: URL
+    ) throws -> (text: String, skippedSpeech: Bool) {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw TranscriptionError.submissionFailed("No response from server")
         }
@@ -272,7 +294,7 @@ class TranscriptionService {
             ))
         }
 
-        return try parseTranscript(from: data)
+        return (try parseTranscript(from: data), TranscriptionResponseParser.looksLikeSkippedSpeech(data))
     }
     private func audioContentType(for fileName: String) -> String {
         if fileName.lowercased().hasSuffix(".wav") {

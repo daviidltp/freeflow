@@ -7,6 +7,7 @@ enum TranscriptTextCoreTests {
         testInvalidTranscriptResponses()
         testHighConfidenceHallucinationsAreSuppressed()
         testPossibleRealSpeechIsPreserved()
+        testSkippedSpeechDetection()
         testPostProcessedTranscriptSanitization()
         testModeSpecificSanitization()
         testInstructionExecutionGuard()
@@ -146,6 +147,35 @@ enum TranscriptTextCoreTests {
             ),
             "Explicit translation output should bypass the instruction guard"
         )
+    }
+
+    private static func testSkippedSpeechDetection() {
+        // Un tramo de 30 s resumido en 14 palabras: Whisper se saltó lo que se dijo.
+        let skipped = jsonData([
+            "text": "Primera parte dictada con normalidad. Una frase corta que resume medio minuto de voz sin parar.",
+            "segments": [
+                ["start": 0.0, "end": 12.0, "text": "Primera parte dictada con normalidad y bastantes palabras seguidas para llenar doce segundos de voz real aquí mismo ahora."],
+                ["start": 28.1, "end": 58.1, "text": "Una frase corta que resume medio minuto de voz sin parar, de verdad."]
+            ]
+        ])
+        TestSupport.expect(TranscriptionResponseParser.looksLikeSkippedSpeech(skipped), "long segment with few words is skipped speech")
+
+        let normal = jsonData([
+            "text": "Dictado normal.",
+            "segments": [
+                ["start": 0.0, "end": 13.0, "text": String(repeating: "palabra ", count: 19)],
+                ["start": 13.0, "end": 15.0, "text": "y fin."]
+            ]
+        ])
+        TestSupport.expect(!TranscriptionResponseParser.looksLikeSkippedSpeech(normal), "slow but complete dictation is not skipped speech")
+
+        let shortPause = jsonData([
+            "text": "Vale.",
+            "segments": [["start": 0.0, "end": 6.0, "text": "Vale."]]
+        ])
+        TestSupport.expect(!TranscriptionResponseParser.looksLikeSkippedSpeech(shortPause), "short segments are never flagged")
+
+        TestSupport.expect(!TranscriptionResponseParser.looksLikeSkippedSpeech(jsonData(["text": "Sin segmentos."])), "responses without segments are not flagged")
     }
 
     private static func jsonData(_ object: [String: Any]) -> Data {
