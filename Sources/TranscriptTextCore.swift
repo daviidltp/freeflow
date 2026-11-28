@@ -59,6 +59,36 @@ enum TranscriptionResponseParser {
         return text
     }
 
+    // Whisper a veces se salta voz: resume en una frase corta un tramo largo en el
+    // que se habló sin parar (con el glosario como pista pasa más). En los dictados
+    // reales, un tramo de 10 s o más lleva entre 1,5 y 3 palabras por segundo; el
+    // tramo que se comió media frase llevaba 0,47.
+    private static let skippedSpeechMinimumSegmentSeconds = 10.0
+    private static let skippedSpeechMaximumWordsPerSecond = 1.0
+
+    /// Si la respuesta (verbose_json) tiene un tramo largo con muy pocas palabras,
+    /// señal de que Whisper no transcribió parte de lo que se dijo.
+    static func looksLikeSkippedSpeech(_ data: Data) -> Bool {
+        guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let segments = json["segments"] as? [[String: Any]] else {
+            return false
+        }
+        return segments.contains { segment in
+            guard let start = (segment["start"] as? NSNumber)?.doubleValue,
+                  let end = (segment["end"] as? NSNumber)?.doubleValue,
+                  let text = segment["text"] as? String else {
+                return false
+            }
+            let seconds = end - start
+            guard seconds >= skippedSpeechMinimumSegmentSeconds else { return false }
+            return Double(wordCount(text)) / seconds < skippedSpeechMaximumWordsPerSecond
+        }
+    }
+
+    static func wordCount(_ text: String) -> Int {
+        text.split { $0.isWhitespace }.count
+    }
+
     private static func isHallucination(text: String, json: [String: Any]) -> Bool {
         let normalized = text
             .lowercased()

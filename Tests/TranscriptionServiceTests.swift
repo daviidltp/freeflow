@@ -18,6 +18,14 @@ enum TranscriptionServiceTests {
         TestSupport.expect(!TranscriptionService.looksLikePromptEcho("Abre Codex y mira el Drive de Cutmax, bro.", prompt: prompt), "normal sentence with terms")
         TestSupport.expect(!TranscriptionService.looksLikePromptEcho("Hola.", prompt: prompt), "normal short dictation")
         TestSupport.expect(!TranscriptionService.looksLikePromptEcho("Codex", prompt: prompt), "single term is not enough")
+        TestSupport.expectEqual(
+            TranscriptionService.preferredTranscript(original: "Solo la mitad.", retry: "Solo la mitad y también el resto de lo dicho."),
+            "Solo la mitad y también el resto de lo dicho."
+        )
+        TestSupport.expectEqual(
+            TranscriptionService.preferredTranscript(original: "Abre Codex y mira el Drive.", retry: "Abre codes."),
+            "Abre Codex y mira el Drive."
+        )
         let recorder = ValidationRequestRecorder()
         let savedCredential = "saved-main-credential"
         let savedBaseURL = "https://saved-provider.invalid/v1"
